@@ -20,6 +20,13 @@ const ExaRequestSchema = z.object({
 	highlights: z.boolean().optional()
 });
 
+// Exa web contents request schema
+const ExaWebContentsRequestSchema = z.object({
+	urls: z.array(z.string().url()).min(1, 'at least one URL is required').max(20, 'maximum 20 URLs allowed'),
+	getText: z.boolean().optional(),
+	getHighlights: z.boolean().optional()
+});
+
 async function exaSearch(query: string, numResults: number, highlights: boolean) {
 	const exaKey = process.env.EXA_API_KEY;
 	if (!exaKey) {
@@ -72,7 +79,7 @@ async function exaSearch(query: string, numResults: number, highlights: boolean)
 }
 
 // Fetch contents for a list of URLs
-async function exaContents(urls: string[]) {
+async function exaContents(urls: string[], getText = true, getHighlights = false) {
 	const exaKey = process.env.EXA_API_KEY;
 	if (!exaKey) {
 		throw new Error('Missing EXA_API_KEY');
@@ -83,16 +90,17 @@ async function exaContents(urls: string[]) {
 
 	try {
 		const baseUrl = process.env.EXA_API_BASE_URL || 'https://api.exa.ai';
+		const payload: any = { urls };
+		if (getText) payload.text = true;
+		if (getHighlights) payload.highlights = true;
+
 		const res = await fetch(`${baseUrl}/contents`, {
 			method: 'POST',
 			headers: {
 				'x-api-key': exaKey,
 				'Content-Type': 'application/json'
 			},
-			body: JSON.stringify({
-				urls,
-				text: true
-			}),
+			body: JSON.stringify(payload),
 			signal: controller.signal
 		});
 
@@ -252,6 +260,24 @@ app.post('/tools/exa/search', async (req: Request, res: Response) => {
 	}
 });
 
+// Direct web contents endpoint
+// POST /tools/exa/contents
+// Body: { urls: string[], getText?: boolean, getHighlights?: boolean }
+app.post('/tools/exa/contents', async (req: Request, res: Response) => {
+	const parsed = ExaWebContentsRequestSchema.safeParse(req.body);
+	if (!parsed.success) {
+		return res.status(400).json({ error: parsed.error.flatten() });
+	}
+	const { urls, getText = true, getHighlights = false } = parsed.data;
+
+	try {
+		const data = await exaContents(urls, getText, getHighlights);
+		return res.json(data);
+	} catch (err: any) {
+		return res.status(500).json({ error: 'Exa contents request failed', details: err?.message || String(err) });
+	}
+});
+
 // Vapi custom tool webhook (sync)
 // Configure in Vapi Dashboard as:
 // - Tool type: function
@@ -321,6 +347,81 @@ app.post('/tools/exa/webhook', async (req: Request, res: Response) => {
 			results.push({
 				toolCallId,
 				result: { error: 'Exa request failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
+// Vapi custom tool webhook for web contents
+// Configure in Vapi Dashboard as:
+// - Tool type: function
+// - Function name: exa_get_contents
+// - Parameters: { urls: string[], getText?: boolean, getHighlights?: boolean }
+// - Server URL: https://<your-public-host>/tools/exa/contents/webhook
+app.post('/tools/exa/contents/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {
+				// keep as string to trigger validation error below
+			}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'exa_get_contents') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const parsed = ExaWebContentsRequestSchema.safeParse({
+			urls: args?.urls,
+			getText: typeof args?.getText === 'boolean' ? args.getText : undefined,
+			getHighlights: typeof args?.getHighlights === 'boolean' ? args.getHighlights : undefined
+		});
+
+		if (!parsed.success) {
+			results.push({
+				toolCallId,
+				result: { error: 'Invalid arguments', details: parsed.error.flatten() }
+			});
+			continue;
+		}
+
+		const { urls, getText = true, getHighlights = false } = parsed.data;
+		try {
+			const data = await exaContents(urls, getText, getHighlights);
+			results.push({ toolCallId, result: data });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Exa contents request failed', details: err?.message || String(err) }
 			});
 		}
 	}
@@ -532,6 +633,114 @@ async function attachOutboundTool(): Promise<any> {
 	return { ok: true, steps, attached: true, toolId, assistant: { id: patched?.id } };
 }
 
+async function attachExaContentsTool(): Promise<any> {
+	const vapiKey = process.env.VAPI_API_KEY;
+	const assistantId = process.env.VAPI_ASSISTANT_ID;
+	const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+	const steps: any[] = [];
+
+	if (!vapiKey) throw new Error('Missing VAPI_API_KEY');
+	if (!assistantId) throw new Error('Missing VAPI_ASSISTANT_ID');
+	if (!publicBaseUrl) throw new Error('Missing PUBLIC_BASE_URL');
+
+	const serverUrl = `${publicBaseUrl.replace(/\/+$/, '')}/tools/exa/contents/webhook`;
+	const headers = {
+		'Authorization': `Bearer ${vapiKey}`,
+		'Content-Type': 'application/json'
+	} as Record<string, string>;
+
+	let toolId: string | undefined;
+
+	// Try to create the tool first
+	{
+		const body = {
+			type: 'function',
+			function: {
+				name: 'exa_get_contents',
+				description: 'Fetch full web page contents from a list of URLs using Exa AI. Returns text and optional highlights from each URL.',
+				parameters: {
+					type: 'object',
+					properties: {
+						urls: { 
+							type: 'array',
+							items: { type: 'string' },
+							description: 'List of URLs to fetch contents from (1-20 URLs)',
+							minItems: 1,
+							maxItems: 20
+						},
+						getText: { type: 'boolean', description: 'Whether to include full text content (default: true)' },
+						getHighlights: { type: 'boolean', description: 'Whether to include content highlights (default: false)' }
+					},
+					required: ['urls']
+				}
+			},
+			server: { url: serverUrl }
+		};
+		const resp = await fetch('https://api.vapi.ai/tool', { method: 'POST', headers, body: JSON.stringify(body) });
+		if (resp.ok) {
+			const data = await resp.json();
+			toolId = data?.id;
+			steps.push({ createTool: 'created', id: toolId });
+		} else {
+			const text = await resp.text();
+			steps.push({ createTool: 'failed', status: resp.status, body: text });
+		}
+	}
+
+	// If create failed or no id, try to find by name
+	if (!toolId) {
+		const listRes = await fetch('https://api.vapi.ai/tool', { headers });
+		if (listRes.ok) {
+			const tools = await listRes.json();
+			const existing = Array.isArray(tools) ? tools.find((t: any) => (t?.function?.name === 'exa_get_contents')) : undefined;
+			if (existing?.id) {
+				toolId = existing.id;
+				steps.push({ lookupTool: 'found', id: toolId });
+			} else {
+				steps.push({ lookupTool: 'not_found' });
+			}
+		} else {
+			const text = await listRes.text();
+			steps.push({ lookupTool: 'failed', status: listRes.status, body: text });
+		}
+	}
+
+	if (!toolId) {
+		return { ok: false, steps, error: 'Unable to resolve exa_get_contents tool id' };
+	}
+
+	// Fetch assistant and attach tool id
+	const getAsstRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, { headers });
+	if (!getAsstRes.ok) {
+		const text = await getAsstRes.text();
+		return { ok: false, steps, error: 'Fetch assistant failed', status: getAsstRes.status, body: text };
+	}
+	const assistant = await getAsstRes.json();
+	const modelObj = assistant?.model ?? {};
+	const currentToolIds: string[] = Array.isArray(modelObj?.toolIds) ? modelObj.toolIds : [];
+
+	if (currentToolIds.includes(toolId)) {
+		steps.push({ attach: 'already_attached', toolId });
+		return { ok: true, steps, attached: false, toolId };
+	}
+
+	const nextToolIds = [...currentToolIds, toolId];
+	const patchBody: any = { model: { ...modelObj, toolIds: nextToolIds } };
+	const patchRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
+		method: 'PATCH',
+		headers,
+		body: JSON.stringify(patchBody)
+	});
+	if (!patchRes.ok) {
+		const text = await patchRes.text();
+		return { ok: false, steps, error: 'Attach failed', status: patchRes.status, body: text, toolId };
+	}
+
+	const patched = await patchRes.json();
+	steps.push({ attach: 'success', toolId });
+	return { ok: true, steps, attached: true, toolId, assistant: { id: patched?.id } };
+}
+
 app.get('/tools/exa/status', async (_req: Request, res: Response) => {
 	try {
 		const vapiKey = process.env.VAPI_API_KEY;
@@ -551,6 +760,15 @@ app.get('/tools/exa/status', async (_req: Request, res: Response) => {
 app.post('/tools/exa/attach', async (_req: Request, res: Response) => {
 	try {
 		const result = await attachExaTool();
+		return res.status(result.ok ? 200 : 502).json(result);
+	} catch (e: any) {
+		return res.status(500).json({ ok: false, error: e?.message || String(e) });
+	}
+});
+
+app.post('/tools/exa/contents/attach', async (_req: Request, res: Response) => {
+	try {
+		const result = await attachExaContentsTool();
 		return res.status(result.ok ? 200 : 502).json(result);
 	} catch (e: any) {
 		return res.status(500).json({ ok: false, error: e?.message || String(e) });
@@ -587,6 +805,8 @@ app.listen(PORT, () => {
 	console.log(`Server listening on http://localhost:${PORT}`);
 	console.log('Exa tool endpoint (direct): POST /tools/exa/search');
 	console.log('Vapi tool webhook (exa_search): POST /tools/exa/webhook');
+	console.log('Exa contents endpoint (direct): POST /tools/exa/contents');
+	console.log('Vapi tool webhook (exa_get_contents): POST /tools/exa/contents/webhook');
 	console.log('Outbound tool endpoint (direct): POST /tools/outbound/start');
 	console.log('Vapi tool webhook (make_outbound_call): POST /tools/outbound/webhook');
 });
