@@ -146,6 +146,94 @@ async function exaSearchWithContents(query: string, numResults: number, highligh
 	}
 }
 
+// Outbound call tool
+const OutboundCallRequestSchema = z.object({
+	customerNumber: z.string().min(8, 'customerNumber is required'),
+	instructions: z.string().min(1, 'instructions is required')
+});
+
+async function createOutboundCall(customerNumber: string, instructions: string) {
+	const vapiKey = process.env.VAPI_API_KEY;
+	const outboundAssistantId = process.env.OUTBOUND_ASSISTANT_ID;
+	const phoneNumberId = process.env.SECOND_PHONE_NUMBER_ID;
+	if (!vapiKey) throw new Error('Missing VAPI_API_KEY');
+	if (!outboundAssistantId) throw new Error('Missing OUTBOUND_ASSISTANT_ID');
+	if (!phoneNumberId) throw new Error('Missing SECOND_PHONE_NUMBER_ID');
+
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 20000);
+	try {
+		const headers = {
+			'Authorization': `Bearer ${vapiKey}`,
+			'Content-Type': 'application/json'
+		} as Record<string, string>;
+
+		const body = {
+			assistantId: outboundAssistantId,
+			phoneNumberId,
+			customer: { number: customerNumber },
+			assistantOverrides: {
+				model: {
+					provider: 'openai',
+					model: 'gpt-4o-mini',
+					messages: [
+						{ role: 'system', content: instructions }
+					]
+				}
+			}
+		};
+
+		const res = await fetch('https://api.vapi.ai/call', {
+			method: 'POST',
+			headers,
+			body: JSON.stringify(body),
+			signal: controller.signal
+		});
+		if (!res.ok) {
+			const text = await res.text();
+			throw new Error(`Vapi Create Call error: ${text}`);
+		}
+		return res.json();
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+// Optional: update phone number metadata with last target, only if explicitly enabled
+async function patchSecondPhoneNumberDestination(customerNumber: string) {
+	const vapiKey = process.env.VAPI_API_KEY;
+	const phoneNumberId = process.env.SECOND_PHONE_NUMBER_ID;
+	if (!vapiKey) throw new Error('Missing VAPI_API_KEY');
+	if (!phoneNumberId) throw new Error('Missing SECOND_PHONE_NUMBER_ID');
+
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 15000);
+	try {
+		const headers = {
+			'Authorization': `Bearer ${vapiKey}`,
+			'Content-Type': 'application/json'
+		} as Record<string, string>;
+		// We only set metadata by default to avoid org-specific routing configs.
+		// If your org requires a specific routing field, replace this with that field.
+		const body = {
+			metadata: { lastCustomerNumber: customerNumber }
+		};
+		const res = await fetch(`https://api.vapi.ai/phone-number/${phoneNumberId}`, {
+			method: 'PATCH',
+			headers,
+			body: JSON.stringify(body),
+			signal: controller.signal
+		});
+		if (!res.ok) {
+			const text = await res.text();
+			throw new Error(`Vapi Phone Number update error: ${text}`);
+		}
+		return res.json();
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 // Direct test endpoint (sync)
 // POST /tools/exa/search
 // Body: { query: string, numResults?: number, highlights?: boolean }
@@ -343,6 +431,107 @@ async function attachExaTool(): Promise<any> {
 	return { ok: true, steps, attached: true, toolId, assistant: { id: patched?.id } };
 }
 
+async function attachOutboundTool(): Promise<any> {
+	const vapiKey = process.env.VAPI_API_KEY;
+	const assistantId = process.env.VAPI_ASSISTANT_ID;
+	const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+	const steps: any[] = [];
+
+	if (!vapiKey) throw new Error('Missing VAPI_API_KEY');
+	if (!assistantId) throw new Error('Missing VAPI_ASSISTANT_ID');
+	if (!publicBaseUrl) throw new Error('Missing PUBLIC_BASE_URL');
+
+	const serverUrl = `${publicBaseUrl.replace(/\/+$/, '')}/tools/outbound/webhook`;
+	const headers = {
+		'Authorization': `Bearer ${vapiKey}`,
+		'Content-Type': 'application/json'
+	} as Record<string, string>;
+
+	let toolId: string | undefined;
+
+	// Try to create the tool first
+	{
+		const body = {
+			type: 'function',
+			function: {
+				name: 'make_outbound_call',
+				description: 'Place an outbound phone call to the provided customer number using the constant from-number.',
+				parameters: {
+					type: 'object',
+					properties: {
+						customerNumber: { type: 'string', description: 'Destination phone in E.164 format, e.g. +14155551212' },
+						instructions: { type: 'string', description: 'System instructions for the assistant on this call' }
+					},
+					required: ['customerNumber', 'instructions']
+				}
+			},
+			server: { url: serverUrl }
+		};
+		const resp = await fetch('https://api.vapi.ai/tool', { method: 'POST', headers, body: JSON.stringify(body) });
+		if (resp.ok) {
+			const data = await resp.json();
+			toolId = data?.id;
+			steps.push({ createTool: 'created', id: toolId });
+		} else {
+			const text = await resp.text();
+			steps.push({ createTool: 'failed', status: resp.status, body: text });
+		}
+	}
+
+	// If create failed or no id, try to find by name
+	if (!toolId) {
+		const listRes = await fetch('https://api.vapi.ai/tool', { headers });
+		if (listRes.ok) {
+			const tools = await listRes.json();
+			const existing = Array.isArray(tools) ? tools.find((t: any) => (t?.function?.name === 'make_outbound_call')) : undefined;
+			if (existing?.id) {
+				toolId = existing.id;
+				steps.push({ lookupTool: 'found', id: toolId });
+			} else {
+				steps.push({ lookupTool: 'not_found' });
+			}
+		} else {
+			const text = await listRes.text();
+			steps.push({ lookupTool: 'failed', status: listRes.status, body: text });
+		}
+	}
+
+	if (!toolId) {
+		return { ok: false, steps, error: 'Unable to resolve make_outbound_call tool id' };
+	}
+
+	// Fetch assistant and attach tool id
+	const getAsstRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, { headers });
+	if (!getAsstRes.ok) {
+		const text = await getAsstRes.text();
+		return { ok: false, steps, error: 'Fetch assistant failed', status: getAsstRes.status, body: text };
+	}
+	const assistant = await getAsstRes.json();
+	const modelObj = assistant?.model ?? {};
+	const currentToolIds: string[] = Array.isArray(modelObj?.toolIds) ? modelObj.toolIds : [];
+
+	if (currentToolIds.includes(toolId)) {
+		steps.push({ attach: 'already_attached', toolId });
+		return { ok: true, steps, attached: false, toolId };
+	}
+
+	const nextToolIds = [...currentToolIds, toolId];
+	const patchBody: any = { model: { ...modelObj, toolIds: nextToolIds } };
+	const patchRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
+		method: 'PATCH',
+		headers,
+		body: JSON.stringify(patchBody)
+	});
+	if (!patchRes.ok) {
+		const text = await patchRes.text();
+		return { ok: false, steps, error: 'Attach failed', status: patchRes.status, body: text, toolId };
+	}
+
+	const patched = await patchRes.json();
+	steps.push({ attach: 'success', toolId });
+	return { ok: true, steps, attached: true, toolId, assistant: { id: patched?.id } };
+}
+
 app.get('/tools/exa/status', async (_req: Request, res: Response) => {
 	try {
 		const vapiKey = process.env.VAPI_API_KEY;
@@ -368,10 +557,38 @@ app.post('/tools/exa/attach', async (_req: Request, res: Response) => {
 	}
 });
 
+// Outbound tool: status + attach endpoints
+app.get('/tools/outbound/status', async (_req: Request, res: Response) => {
+	try {
+		const vapiKey = process.env.VAPI_API_KEY;
+		const assistantId = process.env.VAPI_ASSISTANT_ID;
+		if (!vapiKey || !assistantId) {
+			return res.status(400).json({ error: 'Missing VAPI_API_KEY or VAPI_ASSISTANT_ID' });
+		}
+		const headers = { 'Authorization': `Bearer ${vapiKey}` } as Record<string, string>;
+		const asstRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, { headers });
+		const body = await asstRes.text();
+		return res.status(asstRes.ok ? 200 : 502).json({ ok: asstRes.ok, raw: body });
+	} catch (e: any) {
+		return res.status(500).json({ error: e?.message || String(e) });
+	}
+});
+
+app.post('/tools/outbound/attach', async (_req: Request, res: Response) => {
+	try {
+		const result = await attachOutboundTool();
+		return res.status(result.ok ? 200 : 502).json(result);
+	} catch (e: any) {
+		return res.status(500).json({ ok: false, error: e?.message || String(e) });
+	}
+});
+
 app.listen(PORT, () => {
 	console.log(`Server listening on http://localhost:${PORT}`);
 	console.log('Exa tool endpoint (direct): POST /tools/exa/search');
 	console.log('Vapi tool webhook (exa_search): POST /tools/exa/webhook');
+	console.log('Outbound tool endpoint (direct): POST /tools/outbound/start');
+	console.log('Vapi tool webhook (make_outbound_call): POST /tools/outbound/webhook');
 });
 
 // Optional: auto-create Vapi tool and attach to assistant if env is set
@@ -476,5 +693,201 @@ void (async () => {
 		console.log('Attached exa_search tool to assistant:', toolId);
 	} catch (e: any) {
 		console.warn('Vapi auto-setup error:', e?.message || String(e));
+	}
+})(); 
+
+// Outbound: direct start endpoint
+// POST /tools/outbound/start
+// Body: { customerNumber: string, instructions: string }
+app.post('/tools/outbound/start', async (req: Request, res: Response) => {
+	const parsed = OutboundCallRequestSchema.safeParse(req.body);
+	if (!parsed.success) {
+		return res.status(400).json({ error: parsed.error.flatten() });
+	}
+	const { customerNumber, instructions } = parsed.data;
+	try {
+		if (String(process.env.VAPI_FORCE_PHONE_PATCH || '').toLowerCase() === 'true') {
+			try {
+				await patchSecondPhoneNumberDestination(customerNumber);
+			} catch (e: any) {
+				console.warn('Phone number PATCH failed (continuing):', e?.message || String(e));
+			}
+		}
+		const data = await createOutboundCall(customerNumber, instructions);
+		return res.json(data);
+	} catch (err: any) {
+		return res.status(500).json({ error: 'Outbound call failed', details: err?.message || String(err) });
+	}
+});
+
+// Outbound: Vapi custom tool webhook
+// Configure in Vapi Dashboard:
+// - Tool type: function
+// - Function name: make_outbound_call
+// - Parameters: { customerNumber: string, instructions: string }
+// - Server URL: https://<your-public-host>/tools/outbound/webhook
+app.post('/tools/outbound/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+		if (name !== 'make_outbound_call') {
+			results.push({ toolCallId, result: { error: 'Unknown tool function', name } });
+			continue;
+		}
+
+		const parsed = OutboundCallRequestSchema.safeParse({
+			customerNumber: args?.customerNumber,
+			instructions: args?.instructions
+		});
+		if (!parsed.success) {
+			results.push({ toolCallId, result: { error: 'Invalid arguments', details: parsed.error.flatten() } });
+			continue;
+		}
+
+		const { customerNumber, instructions } = parsed.data;
+		try {
+			if (String(process.env.VAPI_FORCE_PHONE_PATCH || '').toLowerCase() === 'true') {
+				try {
+					await patchSecondPhoneNumberDestination(customerNumber);
+				} catch (e: any) {
+					console.warn('Phone number PATCH failed (continuing):', e?.message || String(e));
+				}
+			}
+			const data = await createOutboundCall(customerNumber, instructions);
+			results.push({ toolCallId, result: data });
+		} catch (err: any) {
+			results.push({ toolCallId, result: { error: 'Outbound call failed', details: err?.message || String(err) } });
+		}
+	}
+
+	return res.json({ results });
+});
+
+// Optional: auto-create outbound Vapi tool and attach to assistant if env is set
+void (async () => {
+	try {
+		const vapiKey = process.env.VAPI_API_KEY;
+		const assistantId = process.env.VAPI_ASSISTANT_ID;
+		const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+		if (!vapiKey || !assistantId || !publicBaseUrl) {
+			console.log('Vapi outbound auto-setup skipped: missing VAPI_API_KEY, VAPI_ASSISTANT_ID, or PUBLIC_BASE_URL');
+			return;
+		}
+
+		const serverUrl = `${publicBaseUrl.replace(/\/+$/, '')}/tools/outbound/webhook`;
+		const headers = {
+			'Authorization': `Bearer ${vapiKey}`,
+			'Content-Type': 'application/json'
+		} as Record<string, string>;
+
+		// Try to find existing tool by name
+		let toolId: string | undefined;
+		try {
+			const listRes = await fetch('https://api.vapi.ai/tool', { headers });
+			if (listRes.ok) {
+				const tools = await listRes.json();
+				if (Array.isArray(tools)) {
+					const existing = tools.find((t: any) => (t?.function?.name === 'make_outbound_call'));
+					if (existing?.id) {
+						toolId = existing.id as string;
+					}
+				}
+			}
+		} catch {}
+
+		// Create tool if not found
+		if (!toolId) {
+			const createRes = await fetch('https://api.vapi.ai/tool', {
+				method: 'POST',
+				headers,
+				body: JSON.stringify({
+					type: 'function',
+					function: {
+						name: 'make_outbound_call',
+						description: 'Place an outbound phone call to the provided customer number using the constant from-number.',
+						parameters: {
+							type: 'object',
+							properties: {
+								customerNumber: { type: 'string', description: 'Destination phone in E.164 format, e.g. +14155551212' },
+								instructions: { type: 'string', description: 'System instructions for the assistant on this call' }
+							},
+							required: ['customerNumber', 'instructions']
+						}
+					},
+					server: {
+						url: serverUrl
+					}
+				})
+			});
+			if (!createRes.ok) {
+				const text = await createRes.text();
+				console.warn('Failed to create Vapi tool make_outbound_call:', text);
+				return;
+			}
+			const created = await createRes.json();
+			toolId = created?.id;
+		}
+
+		if (!toolId) {
+			console.warn('Could not resolve Vapi tool id for make_outbound_call');
+			return;
+		}
+
+		// Get current assistant to merge toolIds
+		const getAsstRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, { headers });
+		if (!getAsstRes.ok) {
+			const text = await getAsstRes.text();
+			console.warn('Failed to fetch Vapi assistant:', text);
+			return;
+		}
+		const assistant = await getAsstRes.json();
+		const modelObj = assistant?.model ?? {};
+		const currentToolIds: string[] = Array.isArray(modelObj?.toolIds) ? modelObj.toolIds : [];
+		if (currentToolIds.includes(toolId)) {
+			console.log('Vapi outbound tool already attached to assistant:', toolId);
+		 return;
+		}
+		const nextToolIds = [...currentToolIds, toolId];
+
+		// Patch assistant with updated toolIds (preserve provider/model if present)
+		const patchBody: any = { model: { ...modelObj, toolIds: nextToolIds } };
+		const patchRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
+			method: 'PATCH',
+			headers,
+			body: JSON.stringify(patchBody)
+		});
+		if (!patchRes.ok) {
+			const text = await patchRes.text();
+			console.warn('Failed to attach outbound tool to assistant:', text);
+			return;
+		}
+		console.log('Attached make_outbound_call tool to assistant:', toolId);
+	} catch (e: any) {
+		console.warn('Vapi outbound auto-setup error:', e?.message || String(e));
 	}
 })(); 
