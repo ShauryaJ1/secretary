@@ -27,6 +27,16 @@ const ExaWebContentsRequestSchema = z.object({
 	getHighlights: z.boolean().optional()
 });
 
+// Call status request schema
+const CallStatusRequestSchema = z.object({
+	callId: z.string().min(1, 'callId is required')
+});
+
+// Call messages request schema
+const CallMessagesRequestSchema = z.object({
+	callId: z.string().min(1, 'callId is required')
+});
+
 async function exaSearch(query: string, numResults: number, highlights: boolean) {
 	const exaKey = process.env.EXA_API_KEY;
 	if (!exaKey) {
@@ -207,6 +217,71 @@ async function createOutboundCall(customerNumber: string, instructions: string) 
 	}
 }
 
+// Get call status from Vapi
+async function getCallStatus(callId: string) {
+	const vapiKey = process.env.VAPI_API_KEY;
+	if (!vapiKey) throw new Error('Missing VAPI_API_KEY');
+
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 15000);
+	try {
+		const headers = {
+			'Authorization': `Bearer ${vapiKey}`
+		} as Record<string, string>;
+		
+		const res = await fetch(`https://api.vapi.ai/call/${callId}`, {
+			method: 'GET',
+			headers,
+			signal: controller.signal
+		});
+		
+		if (!res.ok) {
+			const text = await res.text();
+			throw new Error(`Vapi Get Call error: ${text}`);
+		}
+		return res.json();
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+// Get call messages from Vapi
+async function getCallMessages(callId: string) {
+	const vapiKey = process.env.VAPI_API_KEY;
+	if (!vapiKey) throw new Error('Missing VAPI_API_KEY');
+
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 15000);
+	try {
+		const headers = {
+			'Authorization': `Bearer ${vapiKey}`
+		} as Record<string, string>;
+		
+		const res = await fetch(`https://api.vapi.ai/call/${callId}`, {
+			method: 'GET',
+			headers,
+			signal: controller.signal
+		});
+		
+		if (!res.ok) {
+			const text = await res.text();
+			throw new Error(`Vapi Get Call error: ${text}`);
+		}
+		const callData = await res.json();
+		// Extract just the messages and relevant metadata
+		return {
+			id: callData.id,
+			status: callData.status,
+			messages: callData.messages || [],
+			startedAt: callData.startedAt,
+			endedAt: callData.endedAt,
+			endedReason: callData.endedReason
+		};
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 // Optional: update phone number metadata with last target, only if explicitly enabled
 async function patchSecondPhoneNumberDestination(customerNumber: string) {
 	const vapiKey = process.env.VAPI_API_KEY;
@@ -257,6 +332,40 @@ app.post('/tools/exa/search', async (req: Request, res: Response) => {
 		return res.json(data);
 	} catch (err: any) {
 		return res.status(500).json({ error: 'Exa request failed', details: err?.message || String(err) });
+	}
+});
+
+// Direct call status endpoint
+// GET /tools/call/status/:callId
+app.get('/tools/call/status/:callId', async (req: Request, res: Response) => {
+	const parsed = CallStatusRequestSchema.safeParse({ callId: req.params.callId });
+	if (!parsed.success) {
+		return res.status(400).json({ error: parsed.error.flatten() });
+	}
+	const { callId } = parsed.data;
+
+	try {
+		const data = await getCallStatus(callId);
+		return res.json(data);
+	} catch (err: any) {
+		return res.status(500).json({ error: 'Get call status failed', details: err?.message || String(err) });
+	}
+});
+
+// Direct call messages endpoint
+// GET /tools/call/messages/:callId
+app.get('/tools/call/messages/:callId', async (req: Request, res: Response) => {
+	const parsed = CallMessagesRequestSchema.safeParse({ callId: req.params.callId });
+	if (!parsed.success) {
+		return res.status(400).json({ error: parsed.error.flatten() });
+	}
+	const { callId } = parsed.data;
+
+	try {
+		const data = await getCallMessages(callId);
+		return res.json(data);
+	} catch (err: any) {
+		return res.status(500).json({ error: 'Get call messages failed', details: err?.message || String(err) });
 	}
 });
 
@@ -422,6 +531,152 @@ app.post('/tools/exa/contents/webhook', async (req: Request, res: Response) => {
 			results.push({
 				toolCallId,
 				result: { error: 'Exa contents request failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
+// Vapi custom tool webhook for call status
+// Configure in Vapi Dashboard as:
+// - Tool type: function
+// - Function name: get_call_status
+// - Parameters: { callId: string }
+// - Server URL: https://<your-public-host>/tools/call/status/webhook
+app.post('/tools/call/status/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {
+				// keep as string to trigger validation error below
+			}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'get_call_status') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const parsed = CallStatusRequestSchema.safeParse({
+			callId: args?.callId
+		});
+
+		if (!parsed.success) {
+			results.push({
+				toolCallId,
+				result: { error: 'Invalid arguments', details: parsed.error.flatten() }
+			});
+			continue;
+		}
+
+		const { callId } = parsed.data;
+		try {
+			const data = await getCallStatus(callId);
+			results.push({ toolCallId, result: data });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Get call status failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
+// Vapi custom tool webhook for call messages
+// Configure in Vapi Dashboard as:
+// - Tool type: function
+// - Function name: get_call_messages
+// - Parameters: { callId: string }
+// - Server URL: https://<your-public-host>/tools/call/messages/webhook
+app.post('/tools/call/messages/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {
+				// keep as string to trigger validation error below
+			}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'get_call_messages') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const parsed = CallMessagesRequestSchema.safeParse({
+			callId: args?.callId
+		});
+
+		if (!parsed.success) {
+			results.push({
+				toolCallId,
+				result: { error: 'Invalid arguments', details: parsed.error.flatten() }
+			});
+			continue;
+		}
+
+		const { callId } = parsed.data;
+		try {
+			const data = await getCallMessages(callId);
+			results.push({ toolCallId, result: data });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Get call messages failed', details: err?.message || String(err) }
 			});
 		}
 	}
@@ -741,6 +996,206 @@ async function attachExaContentsTool(): Promise<any> {
 	return { ok: true, steps, attached: true, toolId, assistant: { id: patched?.id } };
 }
 
+async function attachCallStatusTool(): Promise<any> {
+	const vapiKey = process.env.VAPI_API_KEY;
+	const assistantId = process.env.VAPI_ASSISTANT_ID;
+	const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+	const steps: any[] = [];
+
+	if (!vapiKey) throw new Error('Missing VAPI_API_KEY');
+	if (!assistantId) throw new Error('Missing VAPI_ASSISTANT_ID');
+	if (!publicBaseUrl) throw new Error('Missing PUBLIC_BASE_URL');
+
+	const serverUrl = `${publicBaseUrl.replace(/\/+$/, '')}/tools/call/status/webhook`;
+	const headers = {
+		'Authorization': `Bearer ${vapiKey}`,
+		'Content-Type': 'application/json'
+	} as Record<string, string>;
+
+	let toolId: string | undefined;
+
+	// Try to create the tool first
+	{
+		const body = {
+			type: 'function',
+			function: {
+				name: 'get_call_status',
+				description: 'Retrieve the full status and details of a call by its ID, including messages, costs, and metadata.',
+				parameters: {
+					type: 'object',
+					properties: {
+						callId: { type: 'string', description: 'The unique ID of the call to retrieve' }
+					},
+					required: ['callId']
+				}
+			},
+			server: { url: serverUrl }
+		};
+		const resp = await fetch('https://api.vapi.ai/tool', { method: 'POST', headers, body: JSON.stringify(body) });
+		if (resp.ok) {
+			const data = await resp.json();
+			toolId = data?.id;
+			steps.push({ createTool: 'created', id: toolId });
+		} else {
+			const text = await resp.text();
+			steps.push({ createTool: 'failed', status: resp.status, body: text });
+		}
+	}
+
+	// If create failed or no id, try to find by name
+	if (!toolId) {
+		const listRes = await fetch('https://api.vapi.ai/tool', { headers });
+		if (listRes.ok) {
+			const tools = await listRes.json();
+			const existing = Array.isArray(tools) ? tools.find((t: any) => (t?.function?.name === 'get_call_status')) : undefined;
+			if (existing?.id) {
+				toolId = existing.id;
+				steps.push({ lookupTool: 'found', id: toolId });
+			} else {
+				steps.push({ lookupTool: 'not_found' });
+			}
+		} else {
+			const text = await listRes.text();
+			steps.push({ lookupTool: 'failed', status: listRes.status, body: text });
+		}
+	}
+
+	if (!toolId) {
+		return { ok: false, steps, error: 'Unable to resolve get_call_status tool id' };
+	}
+
+	// Fetch assistant and attach tool id
+	const getAsstRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, { headers });
+	if (!getAsstRes.ok) {
+		const text = await getAsstRes.text();
+		return { ok: false, steps, error: 'Fetch assistant failed', status: getAsstRes.status, body: text };
+	}
+	const assistant = await getAsstRes.json();
+	const modelObj = assistant?.model ?? {};
+	const currentToolIds: string[] = Array.isArray(modelObj?.toolIds) ? modelObj.toolIds : [];
+
+	if (currentToolIds.includes(toolId)) {
+		steps.push({ attach: 'already_attached', toolId });
+		return { ok: true, steps, attached: false, toolId };
+	}
+
+	const nextToolIds = [...currentToolIds, toolId];
+	const patchBody: any = { model: { ...modelObj, toolIds: nextToolIds } };
+	const patchRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
+		method: 'PATCH',
+		headers,
+		body: JSON.stringify(patchBody)
+	});
+	if (!patchRes.ok) {
+		const text = await patchRes.text();
+		return { ok: false, steps, error: 'Attach failed', status: patchRes.status, body: text, toolId };
+	}
+
+	const patched = await patchRes.json();
+	steps.push({ attach: 'success', toolId });
+	return { ok: true, steps, attached: true, toolId, assistant: { id: patched?.id } };
+}
+
+async function attachCallMessagesTool(): Promise<any> {
+	const vapiKey = process.env.VAPI_API_KEY;
+	const assistantId = process.env.VAPI_ASSISTANT_ID;
+	const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+	const steps: any[] = [];
+
+	if (!vapiKey) throw new Error('Missing VAPI_API_KEY');
+	if (!assistantId) throw new Error('Missing VAPI_ASSISTANT_ID');
+	if (!publicBaseUrl) throw new Error('Missing PUBLIC_BASE_URL');
+
+	const serverUrl = `${publicBaseUrl.replace(/\/+$/, '')}/tools/call/messages/webhook`;
+	const headers = {
+		'Authorization': `Bearer ${vapiKey}`,
+		'Content-Type': 'application/json'
+	} as Record<string, string>;
+
+	let toolId: string | undefined;
+
+	// Try to create the tool first
+	{
+		const body = {
+			type: 'function',
+			function: {
+				name: 'get_call_messages',
+				description: 'Retrieve the conversation transcript/messages from a completed call by its ID.',
+				parameters: {
+					type: 'object',
+					properties: {
+						callId: { type: 'string', description: 'The unique ID of the call to retrieve messages from' }
+					},
+					required: ['callId']
+				}
+			},
+			server: { url: serverUrl }
+		};
+		const resp = await fetch('https://api.vapi.ai/tool', { method: 'POST', headers, body: JSON.stringify(body) });
+		if (resp.ok) {
+			const data = await resp.json();
+			toolId = data?.id;
+			steps.push({ createTool: 'created', id: toolId });
+		} else {
+			const text = await resp.text();
+			steps.push({ createTool: 'failed', status: resp.status, body: text });
+		}
+	}
+
+	// If create failed or no id, try to find by name
+	if (!toolId) {
+		const listRes = await fetch('https://api.vapi.ai/tool', { headers });
+		if (listRes.ok) {
+			const tools = await listRes.json();
+			const existing = Array.isArray(tools) ? tools.find((t: any) => (t?.function?.name === 'get_call_messages')) : undefined;
+			if (existing?.id) {
+				toolId = existing.id;
+				steps.push({ lookupTool: 'found', id: toolId });
+			} else {
+				steps.push({ lookupTool: 'not_found' });
+			}
+		} else {
+			const text = await listRes.text();
+			steps.push({ lookupTool: 'failed', status: listRes.status, body: text });
+		}
+	}
+
+	if (!toolId) {
+		return { ok: false, steps, error: 'Unable to resolve get_call_messages tool id' };
+	}
+
+	// Fetch assistant and attach tool id
+	const getAsstRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, { headers });
+	if (!getAsstRes.ok) {
+		const text = await getAsstRes.text();
+		return { ok: false, steps, error: 'Fetch assistant failed', status: getAsstRes.status, body: text };
+	}
+	const assistant = await getAsstRes.json();
+	const modelObj = assistant?.model ?? {};
+	const currentToolIds: string[] = Array.isArray(modelObj?.toolIds) ? modelObj.toolIds : [];
+
+	if (currentToolIds.includes(toolId)) {
+		steps.push({ attach: 'already_attached', toolId });
+		return { ok: true, steps, attached: false, toolId };
+	}
+
+	const nextToolIds = [...currentToolIds, toolId];
+	const patchBody: any = { model: { ...modelObj, toolIds: nextToolIds } };
+	const patchRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
+		method: 'PATCH',
+		headers,
+		body: JSON.stringify(patchBody)
+	});
+	if (!patchRes.ok) {
+		const text = await patchRes.text();
+		return { ok: false, steps, error: 'Attach failed', status: patchRes.status, body: text, toolId };
+	}
+
+	const patched = await patchRes.json();
+	steps.push({ attach: 'success', toolId });
+	return { ok: true, steps, attached: true, toolId, assistant: { id: patched?.id } };
+}
+
 app.get('/tools/exa/status', async (_req: Request, res: Response) => {
 	try {
 		const vapiKey = process.env.VAPI_API_KEY;
@@ -801,6 +1256,57 @@ app.post('/tools/outbound/attach', async (_req: Request, res: Response) => {
 	}
 });
 
+// Call tools: status + attach endpoints
+app.get('/tools/call/status-tool/status', async (_req: Request, res: Response) => {
+	try {
+		const vapiKey = process.env.VAPI_API_KEY;
+		const assistantId = process.env.VAPI_ASSISTANT_ID;
+		if (!vapiKey || !assistantId) {
+			return res.status(400).json({ error: 'Missing VAPI_API_KEY or VAPI_ASSISTANT_ID' });
+		}
+		const headers = { 'Authorization': `Bearer ${vapiKey}` } as Record<string, string>;
+		const asstRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, { headers });
+		const body = await asstRes.text();
+		return res.status(asstRes.ok ? 200 : 502).json({ ok: asstRes.ok, raw: body });
+	} catch (e: any) {
+		return res.status(500).json({ error: e?.message || String(e) });
+	}
+});
+
+app.post('/tools/call/status-tool/attach', async (_req: Request, res: Response) => {
+	try {
+		const result = await attachCallStatusTool();
+		return res.status(result.ok ? 200 : 502).json(result);
+	} catch (e: any) {
+		return res.status(500).json({ ok: false, error: e?.message || String(e) });
+	}
+});
+
+app.get('/tools/call/messages-tool/status', async (_req: Request, res: Response) => {
+	try {
+		const vapiKey = process.env.VAPI_API_KEY;
+		const assistantId = process.env.VAPI_ASSISTANT_ID;
+		if (!vapiKey || !assistantId) {
+			return res.status(400).json({ error: 'Missing VAPI_API_KEY or VAPI_ASSISTANT_ID' });
+		}
+		const headers = { 'Authorization': `Bearer ${vapiKey}` } as Record<string, string>;
+		const asstRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, { headers });
+		const body = await asstRes.text();
+		return res.status(asstRes.ok ? 200 : 502).json({ ok: asstRes.ok, raw: body });
+	} catch (e: any) {
+		return res.status(500).json({ error: e?.message || String(e) });
+	}
+});
+
+app.post('/tools/call/messages-tool/attach', async (_req: Request, res: Response) => {
+	try {
+		const result = await attachCallMessagesTool();
+		return res.status(result.ok ? 200 : 502).json(result);
+	} catch (e: any) {
+		return res.status(500).json({ ok: false, error: e?.message || String(e) });
+	}
+});
+
 app.listen(PORT, () => {
 	console.log(`Server listening on http://localhost:${PORT}`);
 	console.log('Exa tool endpoint (direct): POST /tools/exa/search');
@@ -809,6 +1315,10 @@ app.listen(PORT, () => {
 	console.log('Vapi tool webhook (exa_get_contents): POST /tools/exa/contents/webhook');
 	console.log('Outbound tool endpoint (direct): POST /tools/outbound/start');
 	console.log('Vapi tool webhook (make_outbound_call): POST /tools/outbound/webhook');
+	console.log('Call status endpoint (direct): GET /tools/call/status/:callId');
+	console.log('Vapi tool webhook (get_call_status): POST /tools/call/status/webhook');
+	console.log('Call messages endpoint (direct): GET /tools/call/messages/:callId');
+	console.log('Vapi tool webhook (get_call_messages): POST /tools/call/messages/webhook');
 });
 
 // Optional: auto-create Vapi tool and attach to assistant if env is set
