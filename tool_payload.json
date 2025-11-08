@@ -1,0 +1,22 @@
+{
+  "type": "function",
+  "function": {
+    "name": "exa_search",
+    "description": "Web search via Exa; returns results enriched with contents",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string", "description": "search query" },
+        "numResults": { "type": "number", "description": "number of results (<=20)" },
+        "highlights": { "type": "boolean", "description": "include highlights" }
+      },
+      "required": ["query"]
+    }
+  },
+  "server": { "url": "https://29e763d8f9c8.ngrok-free.app/tools/exa/webhook" },
+  "messages": [
+    { "type": "request-start", "message": "Searching the web..." },
+    { "type": "request-complete", "message": "I found some results." },
+    { "type": "request-failed", "message": "I couldn't fetch results just now." }
+  ]
+}
