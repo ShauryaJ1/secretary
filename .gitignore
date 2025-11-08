@@ -2,3 +2,8 @@
 /dist
 .env
 pnpm-lock.yaml
+
+# VAPI system prompt sync
+system_prompt.txt
+assistant.json
+.system_prompt.checksum
