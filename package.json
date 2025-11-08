@@ -1,9 +1,24 @@
 {
-  "devDependencies": {
-    "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+  "name": "voice-secretary",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon --watch src --ext ts --exec \"node --loader ts-node/esm src/index.ts\"",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@vapi-ai/server-sdk": "^0.10.2"
+    "cross-fetch": "^4.0.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.30",
+    "nodemon": "^3.1.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
   }
 }
