@@ -4,6 +4,10 @@ import fetch from 'cross-fetch';
 import { z } from 'zod';
 import { VapiClient } from '@vapi-ai/server-sdk';
 import { createClient } from '@supabase/supabase-js';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
 // =============================================================================
 // CONFIGURATION - All environment variables in one place
@@ -1365,7 +1369,14 @@ app.post('/tools/call/messages-tool/attach', async (_req: Request, res: Response
 // =============================================================================
 // Handles dynamic assistant personalization based on caller's phone number
 // Configure in VAPI phone number settings as the server URL
-const genericPrompt = "\n\nYou have access to a couple tools:\n\nexa_search: Search the web to find information about recent news, events, and any information that might be specific to place, person, or time. Do not assume a time unless if the user gives one.\n\nexa_get_contents: Take a URL from the web and get the contents from it.\n\nmake_outbound_call: Place an outbound call to the specified number and with the instructions. The better the instructions and more descriptive they are, the higher chance of success. You can optionally pass in the schedulePlan parameter if the user wants the call to be scheduled for another time, in which case you must ask for the date, month, year, time,  and time zone. The time zone is needed so you can convert the time to the ISO 8601 format the tool requires. UNLESS IF THE USER REQUESTS YOU TO REPEAT THE INSTRUCTION, PHONE NUMBER, OR TIME, DO NOT REPEAT ANYTHING BACK TO THE USER, just take the action. In your instructions, you must tell the agent not to end the call until it has completed the objective, or the person being called asks to end the call\n\nuse get_status on an immediate call after make_outbound_call to see if the call is in progress and to give the user updates. For immediate make_outbound_call tool calls, you should keep calling this get_status tool every now and then so you can update the user.\n\nOnce the get_status is ended, you can get_call_messages to see the results of the outbound ";
+
+// Load assistant tools prompt from external file
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const toolPrompt = readFileSync(
+	join(__dirname, 'prompts', 'assistant-tools.txt'),
+	'utf-8'
+);
 
 let vapi: VapiClient | null = null;
 let supabase: any = null;
@@ -1423,7 +1434,7 @@ app.post('/personalization/webhook', async (req: Request, res: Response) => {
 		// Query Supabase to get custom prompt based on caller's phone number
 		const { data, error: supabaseError } = await supabase
 			.from('HPSecretaryData')
-			.select('user_name, personalization_prompt, voice_provider, voice_name')
+			.select('user_name, personalization_prompt, voice_provider, voice_name, composio_id')
 			.eq('phone_number', callerNumberRaw) 
 			.single();
 
@@ -1439,8 +1450,8 @@ app.post('/personalization/webhook', async (req: Request, res: Response) => {
 
 		let personalizationPrompt = data!.personalization_prompt;
 		if (!personalizationPrompt) {
-			console.error('[Personalization] No custom_prompt field in data for phone number:', callerNumber);
-			return res.status(404).json({ error: 'No custom prompt found for this phone number' });
+			console.log('[Personalization] No personalization prompt found for phone number:', callerNumber);
+			personalizationPrompt = '';
 		}
 		
 		console.log(`[Personalization] Retrieved custom prompt: ${personalizationPrompt}`);
@@ -1451,7 +1462,9 @@ app.post('/personalization/webhook', async (req: Request, res: Response) => {
 			+ now.toLocaleString('en-US', { timeZoneName: 'short' })
 			+ ' You are a personal assistant to ' + data!.user_name + '. ' 
 			+ personalizationPrompt
-			+ genericPrompt;
+			+ toolPrompt
+			+ '\n\nBelow is this users secrets for your tools\n'
+			+ 'Composio ID: ' + data!.composio_id;
 
 		// First, get the current assistant to preserve existing model configuration
 		const currentAssistant = await vapi.assistants.get(CONFIG.PERSONALIZATION_ASSISTANT_ID!);
@@ -1480,10 +1493,12 @@ app.post('/personalization/webhook', async (req: Request, res: Response) => {
 			} as any,
 			voice: {
 				provider: voiceProvider,
-				voiceId: voiceId
+				voiceId: voiceId,
+				speed: 1.5,
 			},
 			firstMessage: '', // Empty for silent transfers
-			firstMessageMode: 'assistant-speaks-first-with-model-generated-message' // Silent transfer mode
+			firstMessageMode: 'assistant-speaks-first-with-model-generated-message', // Silent transfer mode
+			backgroundSound: "off",
 		});
 
 		console.log(`[Personalization] Successfully updated assistant ${CONFIG.PERSONALIZATION_ASSISTANT_ID!} with custom prompt`);
