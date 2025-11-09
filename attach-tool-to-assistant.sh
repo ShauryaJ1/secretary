@@ -94,3 +94,5 @@ echo ""
 echo "Updated assistant:"
 echo "$UPDATE_BODY" | node -e "const data=JSON.parse(require('fs').readFileSync(0,'utf-8')); console.log('Tool IDs:', data?.model?.toolIds || [])"
 
+
+
