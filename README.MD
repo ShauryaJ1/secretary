@@ -9,7 +9,7 @@ The app is run on an Express server in TypeScript that connects to a Supabase-in
 Centrally getting the LLM behind the voice agent to behave the way we wanted it to. This mainly involved dynamically customizing the prompt and engineering the tool prompt to get the LLM to use the tools properly, including sending emails and making calls. 
 
 ## Accomplishments that we're proud of
-Developing and successfully implementing the number of features the agent has; we were surprised by the amount of functionality our end product had, and could see ourselves using our app for our own purposes.
+Developing and successfully implementing the number of features the agent has; we were surprised by the amount of functionality our end product had, and could see ourselves using our app for our own purposes. Specifically, we were able to use Composio to connect our agent with a user's gmail, allowing them to gain fast access to their emails and even write their own. Additionally, our phone-call agent is able to receive specific instructions and coordinate calls, leading to one its well-paired abilities when it comes to google calendar scheduling.
 
 ## What we learned
 Rookie member learned about the fundamental concepts and implementation details surrounding an Express server written in Typescript, while all members developed a deeper understanding of the nature of LLMs and the tools that they can access, unlocking insight into the power in the simplicity and effectiveness of these budding technologies.
