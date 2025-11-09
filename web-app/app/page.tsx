@@ -13,7 +13,7 @@ export default function Home() {
           {/* Call History Section - Takes 2/3 of the space */}
           <div className="lg:col-span-2">
             <CallHistory />
-          </div>
+              </div>
 
           {/* User Info Section - Takes 1/3 of the space */}
           <div className="lg:col-span-1">

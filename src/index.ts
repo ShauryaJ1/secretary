@@ -2,11 +2,22 @@ import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import fetch from 'cross-fetch';
 import { z } from 'zod';
+import { Composio } from '@composio/core';
+import { VercelProvider } from '@composio/vercel';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
-
+// console.log(process.env.PORT);
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
+
+// Initialize Composio client
+const composio = new Composio({
+  apiKey: process.env.COMPOSIO_API_KEY!,
+  provider: new VercelProvider(),
+  toolkitVersions: {
+    gmail: '20251027_00',
+  },
+});
 
 // Health check
 app.get('/health', (_req: Request, res: Response) => {
@@ -35,6 +46,91 @@ const CallStatusRequestSchema = z.object({
 // Call messages request schema
 const CallMessagesRequestSchema = z.object({
 	callId: z.string().min(1, 'callId is required')
+});
+
+// Gmail tool schemas
+const GmailFetchEmailsSchema = z.object({
+	userId: z.string(),
+	query: z.string().optional(),
+	max_results: z.number().int().positive().optional(),
+	verbose: z.boolean().optional(),
+	include_payload: z.boolean().optional(),
+	ids_only: z.boolean().optional(),
+	include_spam_trash: z.boolean().optional(),
+	label_ids: z.array(z.string()).optional(),
+	page_token: z.string().optional(),
+	user_id: z.string().optional(),
+});
+
+const GmailListThreadsSchema = z.object({
+	userId: z.string(),
+	query: z.string().optional(),
+	max_results: z.number().int().positive().optional(),
+	verbose: z.boolean().optional(),
+	page_token: z.string().optional(),
+	user_id: z.string().optional(),
+});
+
+const GmailFetchMessageByIdSchema = z.object({
+	userId: z.string(),
+	message_id: z.string().min(1, 'message_id is required'),
+	format: z.string().optional(),
+	user_id: z.string().optional(),
+});
+
+const GmailFetchMessageByThreadIdSchema = z.object({
+	userId: z.string(),
+	thread_id: z.string().min(1, 'thread_id is required'),
+	page_token: z.string().optional(),
+	user_id: z.string().optional(),
+});
+
+const GmailSendEmailSchema = z.object({
+	userId: z.string(),
+	recipient_email: z.string().email().optional(),
+	subject: z.string().optional(),
+	body: z.string().optional(),
+	cc: z.array(z.string()).optional(),
+	bcc: z.array(z.string()).optional(),
+	is_html: z.boolean().optional(),
+	user_id: z.string().optional(),
+});
+
+const GmailReplyToThreadSchema = z.object({
+	userId: z.string(),
+	thread_id: z.string().min(1, 'thread_id is required'),
+	message_body: z.string().optional(),
+	recipient_email: z.string().email().optional(),
+	cc: z.array(z.string()).optional(),
+	bcc: z.array(z.string()).optional(),
+	is_html: z.boolean().optional(),
+	extra_recipients: z.array(z.string()).optional(),
+	user_id: z.string().optional(),
+});
+
+const GmailCreateDraftSchema = z.object({
+	userId: z.string(),
+	recipient_email: z.string().email().optional(),
+	subject: z.string().optional(),
+	body: z.string().optional(),
+	cc: z.array(z.string()).optional(),
+	bcc: z.array(z.string()).optional(),
+	is_html: z.boolean().optional(),
+	user_id: z.string().optional(),
+});
+
+const GmailSendDraftSchema = z.object({
+	userId: z.string(),
+	draft_id: z.string().min(1, 'draft_id is required'),
+	user_id: z.string().optional(),
+});
+
+const GmailListDraftsSchema = z.object({
+	userId: z.string(),
+	max_results: z.number().int().positive().optional(),
+	verbose: z.boolean().optional(),
+	page_token: z.string().optional(),
+	user_id: z.string().optional(),
 });
 
 async function exaSearch(query: string, numResults: number, highlights: boolean) {
@@ -1329,6 +1425,604 @@ app.post('/tools/call/messages-tool/attach', async (_req: Request, res: Response
 	}
 });
 
+// Gmail webhooks
+app.post('/tools/gmail/fetch-emails/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'gmail_fetch_emails') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const userId = args?.userId || 'default';
+		try {
+			const result = await composio.tools.execute('GMAIL_FETCH_EMAILS', {
+				userId,
+				arguments: {
+					query: args?.query,
+					max_results: args?.max_results,
+					verbose: args?.verbose,
+					include_payload: args?.include_payload,
+					ids_only: args?.ids_only,
+					include_spam_trash: args?.include_spam_trash,
+					label_ids: args?.label_ids,
+					page_token: args?.page_token,
+					user_id: args?.user_id,
+				},
+			});
+			results.push({ toolCallId, result });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Gmail fetch emails failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
+app.post('/tools/gmail/list-threads/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'gmail_list_threads') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const userId = args?.userId || 'default';
+		try {
+			const result = await composio.tools.execute('GMAIL_LIST_THREADS', {
+				userId,
+				arguments: {
+					query: args?.query,
+					max_results: args?.max_results,
+					verbose: args?.verbose,
+					page_token: args?.page_token,
+					user_id: args?.user_id,
+				},
+			});
+			results.push({ toolCallId, result });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Gmail list threads failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
+app.post('/tools/gmail/fetch-message-by-id/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'gmail_fetch_message_by_id') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const userId = args?.userId || 'default';
+		const parsed = GmailFetchMessageByIdSchema.safeParse({ userId, ...args });
+		if (!parsed.success) {
+			results.push({
+				toolCallId,
+				result: { error: 'Invalid arguments', details: parsed.error.flatten() }
+			});
+			continue;
+		}
+
+		try {
+			const result = await composio.tools.execute('GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID', {
+				userId,
+				arguments: {
+					message_id: args.message_id,
+					format: args?.format,
+					user_id: args?.user_id,
+				},
+			});
+			results.push({ toolCallId, result });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Gmail fetch message by ID failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
+app.post('/tools/gmail/fetch-message-by-thread/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'gmail_fetch_message_by_thread') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const userId = args?.userId || 'default';
+		const parsed = GmailFetchMessageByThreadIdSchema.safeParse({ userId, ...args });
+		if (!parsed.success) {
+			results.push({
+				toolCallId,
+				result: { error: 'Invalid arguments', details: parsed.error.flatten() }
+			});
+			continue;
+		}
+
+		try {
+			const result = await composio.tools.execute('GMAIL_FETCH_MESSAGE_BY_THREAD_ID', {
+				userId,
+				arguments: {
+					thread_id: args.thread_id,
+					page_token: args?.page_token,
+					user_id: args?.user_id,
+				},
+			});
+			results.push({ toolCallId, result });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Gmail fetch message by thread ID failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
+app.post('/tools/gmail/send-email/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'gmail_send_email') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const userId = args?.userId || 'default';
+		try {
+			const result = await composio.tools.execute('GMAIL_SEND_EMAIL', {
+				userId,
+				arguments: {
+					recipient_email: args?.recipient_email,
+					subject: args?.subject,
+					body: args?.body,
+					cc: args?.cc,
+					bcc: args?.bcc,
+					is_html: args?.is_html,
+					user_id: args?.user_id,
+				},
+			});
+			results.push({ toolCallId, result });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Gmail send email failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
+app.post('/tools/gmail/reply-to-thread/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'gmail_reply_to_thread') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const userId = args?.userId || 'default';
+		const parsed = GmailReplyToThreadSchema.safeParse({ userId, ...args });
+		if (!parsed.success) {
+			results.push({
+				toolCallId,
+				result: { error: 'Invalid arguments', details: parsed.error.flatten() }
+			});
+			continue;
+		}
+
+		try {
+			const result = await composio.tools.execute('GMAIL_REPLY_TO_THREAD', {
+				userId,
+				arguments: {
+					thread_id: args.thread_id,
+					message_body: args?.message_body,
+					recipient_email: args?.recipient_email,
+					cc: args?.cc,
+					bcc: args?.bcc,
+					is_html: args?.is_html,
+					extra_recipients: args?.extra_recipients,
+					user_id: args?.user_id,
+				},
+			});
+			results.push({ toolCallId, result });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Gmail reply to thread failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
+app.post('/tools/gmail/create-draft/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'gmail_create_draft') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const userId = args?.userId || 'default';
+		try {
+			const result = await composio.tools.execute('GMAIL_CREATE_EMAIL_DRAFT', {
+				userId,
+				arguments: {
+					recipient_email: args?.recipient_email,
+					subject: args?.subject,
+					body: args?.body,
+					cc: args?.cc,
+					bcc: args?.bcc,
+					is_html: args?.is_html,
+					user_id: args?.user_id,
+				},
+			});
+			results.push({ toolCallId, result });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Gmail create draft failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
+app.post('/tools/gmail/send-draft/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'gmail_send_draft') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const userId = args?.userId || 'default';
+		const parsed = GmailSendDraftSchema.safeParse({ userId, ...args });
+		if (!parsed.success) {
+			results.push({
+				toolCallId,
+				result: { error: 'Invalid arguments', details: parsed.error.flatten() }
+			});
+			continue;
+		}
+
+		try {
+			const result = await composio.tools.execute('GMAIL_SEND_DRAFT', {
+				userId,
+				arguments: {
+					draft_id: args.draft_id,
+					user_id: args?.user_id,
+				},
+			});
+			results.push({ toolCallId, result });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Gmail send draft failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
+app.post('/tools/gmail/list-drafts/webhook', async (req: Request, res: Response) => {
+	const message = req.body?.message ?? req.body;
+	const maybeLists = [
+		message?.toolCallList,
+		message?.toolCalls,
+		message?.toolWithToolCallList
+	].filter((x: unknown) => Array.isArray(x)) as any[][];
+
+	if (maybeLists.length === 0) {
+		return res.status(400).json({ error: 'Invalid Vapi tool call payload: no tool call list' });
+	}
+
+	const toolCalls = maybeLists[0];
+	const results: Array<{ toolCallId: string; result: unknown }> = [];
+
+	for (const toolCall of toolCalls) {
+		const toolCallId = (toolCall?.id || toolCall?.toolCallId) as string | undefined;
+		const name: string | undefined = (toolCall?.name || toolCall?.function?.name) as string | undefined;
+
+		let args: any = toolCall?.arguments ?? toolCall?.function?.arguments ?? toolCall?.function?.parameters ?? {};
+		if (typeof args === 'string') {
+			try {
+				args = JSON.parse(args);
+			} catch {}
+		}
+
+		if (!toolCallId) {
+			continue;
+		}
+
+		if (name !== 'gmail_list_drafts') {
+			results.push({
+				toolCallId,
+				result: { error: 'Unknown tool function', name }
+			});
+			continue;
+		}
+
+		const userId = args?.userId || 'default';
+		try {
+			const result = await composio.tools.execute('GMAIL_LIST_DRAFTS', {
+				userId,
+				arguments: {
+					max_results: args?.max_results,
+					verbose: args?.verbose,
+					page_token: args?.page_token,
+					user_id: args?.user_id,
+				},
+			});
+			results.push({ toolCallId, result });
+		} catch (err: any) {
+			results.push({
+				toolCallId,
+				result: { error: 'Gmail list drafts failed', details: err?.message || String(err) }
+			});
+		}
+	}
+
+	return res.json({ results });
+});
+
 app.listen(PORT, () => {
 	console.log(`Server listening on http://localhost:${PORT}`);
 	console.log('Exa tool endpoint (direct): POST /tools/exa/search');
@@ -1341,6 +2035,16 @@ app.listen(PORT, () => {
 	console.log('Vapi tool webhook (get_call_status): POST /tools/call/status/webhook');
 	console.log('Call messages endpoint (direct): GET /tools/call/messages/:callId');
 	console.log('Vapi tool webhook (get_call_messages): POST /tools/call/messages/webhook');
+	console.log('\nGmail webhooks:');
+	console.log('Vapi tool webhook (gmail_fetch_emails): POST /tools/gmail/fetch-emails/webhook');
+	console.log('Vapi tool webhook (gmail_list_threads): POST /tools/gmail/list-threads/webhook');
+	console.log('Vapi tool webhook (gmail_fetch_message_by_id): POST /tools/gmail/fetch-message-by-id/webhook');
+	console.log('Vapi tool webhook (gmail_fetch_message_by_thread): POST /tools/gmail/fetch-message-by-thread/webhook');
+	console.log('Vapi tool webhook (gmail_send_email): POST /tools/gmail/send-email/webhook');
+	console.log('Vapi tool webhook (gmail_reply_to_thread): POST /tools/gmail/reply-to-thread/webhook');
+	console.log('Vapi tool webhook (gmail_create_draft): POST /tools/gmail/create-draft/webhook');
+	console.log('Vapi tool webhook (gmail_send_draft): POST /tools/gmail/send-draft/webhook');
+	console.log('Vapi tool webhook (gmail_list_drafts): POST /tools/gmail/list-drafts/webhook');
 });
 
 // Optional: auto-create Vapi tool and attach to assistant if env is set

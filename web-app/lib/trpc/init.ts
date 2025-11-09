@@ -2,8 +2,8 @@ import { initTRPC } from '@trpc/server';
 import superjson from 'superjson';
 import { createClient } from '@supabase/supabase-js';
 import { Composio } from '@composio/core';
-import { OpenAIResponsesProvider } from '@composio/openai';
-import { OpenAI } from 'openai';
+import { VercelProvider } from '@composio/vercel';
+import { xai } from '@ai-sdk/xai';
 
 // Create context for tRPC
 export const createTRPCContext = async () => {
@@ -13,24 +13,22 @@ export const createTRPCContext = async () => {
     process.env.SUPABASE_KEY!
   );
 
-  // Initialize Composio client with OpenAI Responses Provider
+  // Initialize Composio client with Vercel AI SDK Provider
   const composio = new Composio({
     apiKey: process.env.COMPOSIO_API_KEY!,
-    provider: new OpenAIResponsesProvider(),
+    provider: new VercelProvider(),
     toolkitVersions: {
       gmail: '20251027_00',  // Use latest for development
     },
   });
 
-  // Initialize OpenAI client
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY!,
-  });
+  // AI SDK model - xAI Grok-4
+  const model = xai('grok-4');
 
   return {
     supabase,
     composio,
-    openai,
+    model,
   };
 };
 

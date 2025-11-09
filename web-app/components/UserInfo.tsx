@@ -8,8 +8,9 @@ import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { Textarea } from '@/components/ui/textarea';
 import { trpc } from '@/lib/trpc/client';
-import { Loader2, Mail, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Loader2, Mail, CheckCircle2, AlertCircle, Send } from 'lucide-react';
 
 export function UserInfo() {
   const [firstName, setFirstName] = useState('');
@@ -18,6 +19,11 @@ export function UserInfo() {
   const [email, setEmail] = useState('');
   const [currentUserId, setCurrentUserId] = useState('');
   const [emails, setEmails] = useState<any[]>([]);
+  const [customPrompt, setCustomPrompt] = useState('');
+  const [agentResponse, setAgentResponse] = useState<string>('');
+  const [directRecipient, setDirectRecipient] = useState('');
+  const [directSubject, setDirectSubject] = useState('');
+  const [directBody, setDirectBody] = useState('');
 
   // tRPC mutations and queries
   const upsertUser = trpc.user.upsert.useMutation();
@@ -28,6 +34,7 @@ export function UserInfo() {
     { enabled: !!currentUserId }
   );
   const fetchEmailsMutation = trpc.composio.fetchEmails.useMutation();
+  const sendEmailDirectMutation = trpc.composio.sendEmailDirect.useMutation();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -118,6 +125,11 @@ export function UserInfo() {
 
         console.log('Fetch emails result:', result);
 
+        // Display assistant message
+        if (result.assistantMessage) {
+          setAgentResponse(result.assistantMessage);
+        }
+
         if (result.emails && result.emails.length > 0) {
           // Parse the nested response structure
           // result.emails[0].output contains the actual email data
@@ -142,6 +154,105 @@ export function UserInfo() {
       }
     } catch (error: any) {
       alert(`Error validating connection: ${error.message}`);
+    }
+  };
+
+  const handleCustomPrompt = async () => {
+    if (!phoneNumber) {
+      alert('Please save your user info first');
+      return;
+    }
+
+    if (!customPrompt.trim()) {
+      alert('Please enter a prompt');
+      return;
+    }
+
+    try {
+      // Refetch connection status
+      const status = await refetchConnection();
+
+      if (status.data?.isConnected) {
+        // Execute custom prompt
+        const result = await fetchEmailsMutation.mutateAsync({
+          userId: phoneNumber,
+          prompt: customPrompt,
+        });
+
+        console.log('Custom prompt result:', result);
+
+        // Display assistant message
+        if (result.assistantMessage) {
+          setAgentResponse(result.assistantMessage);
+        }
+
+        if (result.emails && result.emails.length > 0) {
+          // Parse the nested response structure
+          const firstEmail = result.emails[0];
+          if (firstEmail && firstEmail.output) {
+            try {
+              const parsed = JSON.parse(firstEmail.output);
+              console.log('Parsed data:', parsed);
+              
+              if (parsed.data && parsed.data.messages) {
+                setEmails(parsed.data.messages);
+                alert(`Successfully executed! Found ${parsed.data.messages.length} emails.`);
+              } else {
+                // Handle non-email responses
+                alert('Prompt executed successfully! Check the Agent Response below.');
+                console.log('Full response:', parsed);
+              }
+            } catch (e) {
+              console.error('Failed to parse response:', e);
+              alert('Prompt executed! Check the Agent Response below.');
+              console.log('Raw output:', firstEmail.output);
+            }
+          }
+        } else {
+          alert('Prompt executed successfully! Check the Agent Response below.');
+        }
+      } else {
+        alert('Gmail not connected. Please connect first.');
+      }
+    } catch (error: any) {
+      alert(`Error executing prompt: ${error.message}`);
+    }
+  };
+
+  const handleSendEmailDirect = async () => {
+    if (!phoneNumber) {
+      alert('Please save your user info first');
+      return;
+    }
+
+    if (!directRecipient || !directSubject || !directBody) {
+      alert('Please fill in recipient, subject, and body');
+      return;
+    }
+
+    try {
+      const status = await refetchConnection();
+
+      if (status.data?.isConnected) {
+        const result = await sendEmailDirectMutation.mutateAsync({
+          userId: phoneNumber,
+          recipientEmail: directRecipient,
+          subject: directSubject,
+          body: directBody,
+        });
+
+        console.log('Direct send result:', result);
+        alert(`Email sent successfully to ${directRecipient}!`);
+        
+        // Clear the form
+        setDirectRecipient('');
+        setDirectSubject('');
+        setDirectBody('');
+      } else {
+        alert('Gmail not connected. Please connect first.');
+      }
+    } catch (error: any) {
+      alert(`Error sending email: ${error.message}`);
     }
   };
 
@@ -266,6 +377,128 @@ export function UserInfo() {
             )}
           </Button>
         </div>
+
+        <Separator />
+
+        {/* Custom Prompt Section */}
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-lg font-semibold">Custom AI Prompt</h3>
+            <p className="text-sm text-muted-foreground">
+              Ask the AI agent to do anything with your Gmail
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="customPrompt">Enter your prompt</Label>
+            <Textarea
+              id="customPrompt"
+              value={customPrompt}
+              onChange={(e) => setCustomPrompt(e.target.value)}
+              placeholder="e.g., Find all emails from my boss about the Q4 project, or Draft a reply to the latest email from John"
+              rows={4}
+              className="resize-none"
+            />
+          </div>
+
+          <Button
+            onClick={handleCustomPrompt}
+            className="w-full"
+            disabled={!phoneNumber || !connectionStatus?.isConnected || !customPrompt.trim() || fetchEmailsMutation.isPending}
+          >
+            {fetchEmailsMutation.isPending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Executing...
+              </>
+            ) : (
+              <>
+                <Send className="mr-2 h-4 w-4" />
+                Send Prompt
+              </>
+            )}
+          </Button>
+        </div>
+
+        <Separator />
+
+        {/* Direct Email Send Section */}
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-lg font-semibold">Send Email Directly</h3>
+            <p className="text-sm text-muted-foreground">
+              Send an email without using the AI agent
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="directRecipient">Recipient Email</Label>
+            <Input
+              id="directRecipient"
+              type="email"
+              value={directRecipient}
+              onChange={(e) => setDirectRecipient(e.target.value)}
+              placeholder="recipient@example.com"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="directSubject">Subject</Label>
+            <Input
+              id="directSubject"
+              value={directSubject}
+              onChange={(e) => setDirectSubject(e.target.value)}
+              placeholder="Email subject"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="directBody">Message Body</Label>
+            <Textarea
+              id="directBody"
+              value={directBody}
+              onChange={(e) => setDirectBody(e.target.value)}
+              placeholder="Email message..."
+              rows={4}
+              className="resize-none"
+            />
+          </div>
+
+          <Button
+            onClick={handleSendEmailDirect}
+            className="w-full"
+            disabled={!phoneNumber || !connectionStatus?.isConnected || !directRecipient || !directSubject || !directBody || sendEmailDirectMutation.isPending}
+          >
+            {sendEmailDirectMutation.isPending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Sending...
+              </>
+            ) : (
+              <>
+                <Mail className="mr-2 h-4 w-4" />
+                Send Email Direct
+              </>
+            )}
+          </Button>
+        </div>
+
+        {/* Display Agent Response */}
+        {agentResponse && (
+          <div className="space-y-4">
+            <Separator />
+            <div>
+              <h3 className="text-lg font-semibold">Agent Response</h3>
+              <Alert className="mt-2">
+                <AlertDescription>
+                  <div className="whitespace-pre-wrap text-sm">
+                    {agentResponse}
+                  </div>
+                </AlertDescription>
+              </Alert>
+            </div>
+          </div>
+        )}
 
         {/* Display Emails */}
         {emails.length > 0 && (

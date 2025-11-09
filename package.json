@@ -13,6 +13,8 @@
     "prompt:sync": "./sync-prompt.sh sync"
   },
   "dependencies": {
+    "@composio/core": "^0.2.3",
+    "@composio/vercel": "^0.2.15",
     "cross-fetch": "^4.0.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
