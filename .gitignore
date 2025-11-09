@@ -9,3 +9,4 @@ pnpm-lock.yaml
 system_prompt.txt
 assistant.json
 .system_prompt.checksum
+/rocco/node_modules
