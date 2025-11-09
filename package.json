@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "nodemon --watch src --ext ts --exec \"node --loader ts-node/esm src/index.ts\"",
+    "dev": "nodemon --watch src --ext ts --exec \"tsx src/index.ts\"",
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "prompt:fetch": "./sync-prompt.sh fetch",
@@ -15,6 +15,8 @@
   "dependencies": {
     "@composio/core": "^0.2.3",
     "@composio/vercel": "^0.2.15",
+    "@supabase/supabase-js": "^2.39.0",
+    "@vapi-ai/server-sdk": "^0.10.2",
     "cross-fetch": "^4.0.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
@@ -25,6 +27,7 @@
     "@types/node": "^20.11.30",
     "nodemon": "^3.1.7",
     "ts-node": "^10.9.2",
+    "tsx": "^4.20.6",
     "typescript": "^5.6.3"
   }
 }
