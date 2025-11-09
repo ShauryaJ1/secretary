@@ -13,6 +13,8 @@
     "prompt:sync": "./sync-prompt.sh sync"
   },
   "dependencies": {
+    "@composio/core": "^0.2.3",
+    "@composio/vercel": "^0.2.15",
     "@supabase/supabase-js": "^2.39.0",
     "@vapi-ai/server-sdk": "^0.10.2",
     "cross-fetch": "^4.0.0",

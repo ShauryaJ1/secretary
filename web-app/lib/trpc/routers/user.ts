@@ -29,6 +29,7 @@ export const userRouter = router({
           .update({
             user_name: userName,
             phone_number: input.phoneNumber,
+            composio_id: input.phoneNumber, // Set composio_id to phone number (used as userId)
           })
           .eq('phone_number', input.phoneNumber)
           .select()
@@ -43,6 +44,7 @@ export const userRouter = router({
           .insert({
             user_name: userName,
             phone_number: input.phoneNumber,
+            composio_id: input.phoneNumber, // Set composio_id to phone number (used as userId)
           })
           .select()
           .single();
