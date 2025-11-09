@@ -167,10 +167,18 @@ async function exaSearchWithContents(query: string, numResults: number, highligh
 // Outbound call tool
 const OutboundCallRequestSchema = z.object({
 	customerNumber: z.string().min(8, 'customerNumber is required'),
-	instructions: z.string().min(1, 'instructions is required')
+	instructions: z.string().min(1, 'instructions is required'),
+	schedulePlan: z.object({
+		earliestAt: z.string().min(1, 'earliestAt is required in ISO 8601 format (e.g., 2025-05-30T14:30:00Z)'),
+		latestAt: z.string().optional()
+	}).optional()
 });
 
-async function createOutboundCall(customerNumber: string, instructions: string) {
+async function createOutboundCall(
+	customerNumber: string, 
+	instructions: string,
+	schedulePlan?: { earliestAt: string; latestAt?: string }
+) {
 	const vapiKey = process.env.VAPI_API_KEY;
 	const outboundAssistantId = process.env.OUTBOUND_ASSISTANT_ID;
 	const phoneNumberId = process.env.SECOND_PHONE_NUMBER_ID;
@@ -186,7 +194,7 @@ async function createOutboundCall(customerNumber: string, instructions: string) 
 			'Content-Type': 'application/json'
 		} as Record<string, string>;
 
-		const body = {
+		const body: any = {
 			assistantId: outboundAssistantId,
 			phoneNumberId,
 			customer: { number: customerNumber },
@@ -200,6 +208,11 @@ async function createOutboundCall(customerNumber: string, instructions: string) 
 				}
 			}
 		};
+
+		// Add schedulePlan if provided
+		if (schedulePlan) {
+			body.schedulePlan = schedulePlan;
+		}
 
 		const res = await fetch('https://api.vapi.ai/call', {
 			method: 'POST',
@@ -811,12 +824,21 @@ async function attachOutboundTool(): Promise<any> {
 			type: 'function',
 			function: {
 				name: 'make_outbound_call',
-				description: 'Place an outbound phone call to the provided customer number using the constant from-number.',
+				description: 'Place an outbound phone call to the provided customer number. Can schedule calls for a future time using schedulePlan. For immediate calls, omit schedulePlan. For scheduled calls, ask the user for their timezone to convert to UTC ISO 8601 format.',
 				parameters: {
 					type: 'object',
 					properties: {
 						customerNumber: { type: 'string', description: 'Destination phone in E.164 format, e.g. +14155551212' },
-						instructions: { type: 'string', description: 'System instructions for the assistant on this call' }
+						instructions: { type: 'string', description: 'System instructions for the assistant on this call' },
+						schedulePlan: {
+							type: 'object',
+							description: 'Optional: Schedule the call for a future time. Dates must be in ISO 8601 format with timezone (e.g., 2025-05-30T14:30:00Z for UTC, or 2025-05-30T14:30:00-08:00 for PST). Ask user for their timezone if scheduling.',
+							properties: {
+								earliestAt: { type: 'string', description: 'Earliest time to place the call in ISO 8601 format (required if schedulePlan is provided)' },
+								latestAt: { type: 'string', description: 'Optional: Latest time to place the call in ISO 8601 format' }
+							},
+							required: ['earliestAt']
+						}
 					},
 					required: ['customerNumber', 'instructions']
 				}
@@ -1428,13 +1450,13 @@ void (async () => {
 
 // Outbound: direct start endpoint
 // POST /tools/outbound/start
-// Body: { customerNumber: string, instructions: string }
+// Body: { customerNumber: string, instructions: string, schedulePlan?: { earliestAt: string, latestAt?: string } }
 app.post('/tools/outbound/start', async (req: Request, res: Response) => {
 	const parsed = OutboundCallRequestSchema.safeParse(req.body);
 	if (!parsed.success) {
 		return res.status(400).json({ error: parsed.error.flatten() });
 	}
-	const { customerNumber, instructions } = parsed.data;
+	const { customerNumber, instructions, schedulePlan } = parsed.data;
 	try {
 		if (String(process.env.VAPI_FORCE_PHONE_PATCH || '').toLowerCase() === 'true') {
 			try {
@@ -1443,7 +1465,7 @@ app.post('/tools/outbound/start', async (req: Request, res: Response) => {
 				console.warn('Phone number PATCH failed (continuing):', e?.message || String(e));
 			}
 		}
-		const data = await createOutboundCall(customerNumber, instructions);
+		const data = await createOutboundCall(customerNumber, instructions, schedulePlan);
 		return res.json(data);
 	} catch (err: any) {
 		return res.status(500).json({ error: 'Outbound call failed', details: err?.message || String(err) });
@@ -1492,14 +1514,15 @@ app.post('/tools/outbound/webhook', async (req: Request, res: Response) => {
 
 		const parsed = OutboundCallRequestSchema.safeParse({
 			customerNumber: args?.customerNumber,
-			instructions: args?.instructions
+			instructions: args?.instructions,
+			schedulePlan: args?.schedulePlan
 		});
 		if (!parsed.success) {
 			results.push({ toolCallId, result: { error: 'Invalid arguments', details: parsed.error.flatten() } });
 			continue;
 		}
 
-		const { customerNumber, instructions } = parsed.data;
+		const { customerNumber, instructions, schedulePlan } = parsed.data;
 		try {
 			if (String(process.env.VAPI_FORCE_PHONE_PATCH || '').toLowerCase() === 'true') {
 				try {
@@ -1508,7 +1531,7 @@ app.post('/tools/outbound/webhook', async (req: Request, res: Response) => {
 					console.warn('Phone number PATCH failed (continuing):', e?.message || String(e));
 				}
 			}
-			const data = await createOutboundCall(customerNumber, instructions);
+			const data = await createOutboundCall(customerNumber, instructions, schedulePlan);
 			results.push({ toolCallId, result: data });
 		} catch (err: any) {
 			results.push({ toolCallId, result: { error: 'Outbound call failed', details: err?.message || String(err) } });
@@ -1559,12 +1582,21 @@ void (async () => {
 					type: 'function',
 					function: {
 						name: 'make_outbound_call',
-						description: 'Place an outbound phone call to the provided customer number using the constant from-number.',
+						description: 'Place an outbound phone call to the provided customer number. Can schedule calls for a future time using schedulePlan. For immediate calls, omit schedulePlan. For scheduled calls, ask the user for their timezone to convert to UTC ISO 8601 format.',
 						parameters: {
 							type: 'object',
 							properties: {
 								customerNumber: { type: 'string', description: 'Destination phone in E.164 format, e.g. +14155551212' },
-								instructions: { type: 'string', description: 'System instructions for the assistant on this call' }
+								instructions: { type: 'string', description: 'System instructions for the assistant on this call' },
+								schedulePlan: {
+									type: 'object',
+									description: 'Optional: Schedule the call for a future time. Dates must be in ISO 8601 format with timezone (e.g., 2025-05-30T14:30:00Z for UTC, or 2025-05-30T14:30:00-08:00 for PST). Ask user for their timezone if scheduling.',
+									properties: {
+										earliestAt: { type: 'string', description: 'Earliest time to place the call in ISO 8601 format (required if schedulePlan is provided)' },
+										latestAt: { type: 'string', description: 'Optional: Latest time to place the call in ISO 8601 format' }
+									},
+									required: ['earliestAt']
+								}
 							},
 							required: ['customerNumber', 'instructions']
 						}
