@@ -2,6 +2,12 @@
 
 import { useState } from 'react';
 import { api, Email } from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Mail, CheckCircle2, XCircle, Loader2, MailOpen } from 'lucide-react';
 
 export default function ApiTest() {
   const [email, setEmail] = useState('');
@@ -87,7 +93,6 @@ export default function ApiTest() {
     } catch (err: any) {
       console.error('Error fetching emails:', err);
       
-      // Extract error message from different error formats
       let errorMessage = 'Failed to fetch emails. ';
       
       if (err instanceof Error) {
@@ -124,12 +129,9 @@ export default function ApiTest() {
     }
   };
 
-  // Helper function to safely extract email properties (handles different data structures)
   const getEmailField = (email: Email, field: string): string => {
-    // Try direct property access first
     if (email[field]) return String(email[field]);
     
-    // Try nested structures (some APIs return data in payload or headers)
     if (email.payload?.headers) {
       const header = email.payload.headers.find((h: any) => 
         h.name?.toLowerCase() === field.toLowerCase()
@@ -137,7 +139,6 @@ export default function ApiTest() {
       if (header) return header.value || '';
     }
     
-    // Try alternative field names
     const alternatives: { [key: string]: string[] } = {
       subject: ['Subject', 'subject'],
       from: ['From', 'from', 'sender'],
@@ -167,11 +168,9 @@ export default function ApiTest() {
     try {
       const response = await api.createConnection({ user_id: userId });
       setMessage(`Connection created! Please complete the OAuth flow in the popup window, then check your connection status.`);
-      // Open the redirect URL in a new window for OAuth
       if (response.redirect_url) {
         window.open(response.redirect_url, '_blank');
       }
-      // Reset connection status - user needs to check again after OAuth
       setConnectionExists(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create connection');
@@ -181,205 +180,254 @@ export default function ApiTest() {
   };
 
   return (
-    <div className="w-full max-w-4xl mx-auto p-6 space-y-4">
-      <div className="mb-6">
-        <h2 className="text-3xl font-bold text-black dark:text-zinc-50 mb-2">
-          Gmail Email Viewer
-        </h2>
-        <p className="text-gray-600 dark:text-gray-400">
+    <div className="container mx-auto max-w-4xl p-6 space-y-6">
+      <div className="space-y-2">
+        <h1 className="text-4xl font-bold tracking-tight">Gmail Email Viewer</h1>
+        <p className="text-muted-foreground">
           Connect your Gmail account and view your emails
         </p>
       </div>
       
-      <div className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-black dark:text-zinc-50 mb-2">
-            Email Address
-          </label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Enter your email"
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-zinc-800 dark:border-zinc-700 dark:text-white"
-            disabled={loading}
-          />
-        </div>
-
-        <button
-          onClick={handleCreateUser}
-          disabled={loading}
-          className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-        >
-          {loading ? 'Loading...' : 'Create User'}
-        </button>
-
-        {userId && (
-          <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
-            <p className="text-sm text-green-800 dark:text-green-200">
-              <strong>User ID:</strong> {userId}
-            </p>
-          </div>
-        )}
-
-        {userId && (
+      <Card>
+        <CardHeader>
+          <CardTitle>Get Started</CardTitle>
+          <CardDescription>
+            Create a user account to begin accessing your Gmail
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
           <div className="space-y-2">
-            <button
-              onClick={handleCheckConnection}
+            <Label htmlFor="email">Email Address</Label>
+            <Input
+              id="email"
+              type="email"
+              placeholder="Enter your email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               disabled={loading}
-              className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              Check Connection Status
-            </button>
+            />
+          </div>
 
-            <button
-              onClick={handleCreateConnection}
-              disabled={loading}
-              className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-              Create Connection
-            </button>
+          <Button
+            onClick={handleCreateUser}
+            disabled={loading}
+            className="w-full"
+            size="lg"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading...
+              </>
+            ) : (
+              <>
+                <Mail className="mr-2 h-4 w-4" />
+                Create User
+              </>
+            )}
+          </Button>
+
+          {userId && (
+            <Alert>
+              <CheckCircle2 className="h-4 w-4" />
+              <AlertTitle>User Created</AlertTitle>
+              <AlertDescription>
+                <strong>User ID:</strong> {userId}
+              </AlertDescription>
+            </Alert>
+          )}
+        </CardContent>
+      </Card>
+
+      {userId && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Connection Management</CardTitle>
+            <CardDescription>
+              Manage your Gmail connection
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex gap-2">
+              <Button
+                onClick={handleCheckConnection}
+                disabled={loading}
+                variant="outline"
+                className="flex-1"
+              >
+                {loading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                )}
+                Check Connection
+              </Button>
+
+              <Button
+                onClick={handleCreateConnection}
+                disabled={loading}
+                variant="outline"
+                className="flex-1"
+              >
+                {loading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Mail className="mr-2 h-4 w-4" />
+                )}
+                Create Connection
+              </Button>
+            </div>
 
             {connectionExists === true && (
-              <div className="mt-4 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
-                <h3 className="text-lg font-semibold text-green-800 dark:text-green-200 mb-3">
-                  📧 Fetch Your Emails
-                </h3>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-green-800 dark:text-green-200 mb-2">
-                      Number of emails to fetch
-                    </label>
-                    <input
+              <Card className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-green-900 dark:text-green-100">
+                    <MailOpen className="h-5 w-5" />
+                    Fetch Your Emails
+                  </CardTitle>
+                  <CardDescription className="text-green-700 dark:text-green-300">
+                    Your Gmail account is connected. You can now fetch your emails.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="emailLimit">Number of emails to fetch</Label>
+                    <Input
+                      id="emailLimit"
                       type="number"
                       min="1"
                       max="50"
                       value={emailLimit}
                       onChange={(e) => setEmailLimit(parseInt(e.target.value) || 5)}
-                      className="w-full px-4 py-2 border border-green-300 dark:border-green-700 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent dark:bg-zinc-800 dark:text-white"
                       disabled={loading}
                     />
                   </div>
-                  <button
+                  <Button
                     onClick={handleFetchEmails}
                     disabled={loading}
-                    className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
+                    className="w-full bg-green-600 hover:bg-green-700 text-white"
+                    size="lg"
                   >
-                    {loading ? 'Fetching emails...' : 'Fetch Emails'}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {message && (
-          <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-            <p className="text-sm text-blue-800 dark:text-blue-200">{message}</p>
-          </div>
-        )}
-
-        {error && (
-          <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-lg">
-            <p className="text-sm text-red-800 dark:text-red-200">
-              <strong>Error:</strong> {error}
-            </p>
-          </div>
-        )}
-
-        {emails.length > 0 && (
-          <div className="mt-6 space-y-4">
-            <h3 className="text-xl font-bold text-black dark:text-zinc-50">
-              Your Emails ({emails.length})
-            </h3>
-            <div className="space-y-4">
-              {emails.map((email, index) => {
-                // Log each email to console for debugging
-                console.log(`Email ${index}:`, email);
-                
-                const subject = getEmailField(email, 'subject') || email.subject || email.payload?.headers?.find((h: any) => h.name?.toLowerCase() === 'subject')?.value || 'No Subject';
-                const from = getEmailField(email, 'from') || email.from || email.payload?.headers?.find((h: any) => h.name?.toLowerCase() === 'from')?.value || 'Unknown sender';
-                const to = getEmailField(email, 'to') || email.to || email.payload?.headers?.find((h: any) => h.name?.toLowerCase() === 'to')?.value;
-                const date = getEmailField(email, 'date') || email.date || email.internalDate || email.payload?.headers?.find((h: any) => h.name?.toLowerCase() === 'date')?.value;
-                const snippet = email.snippet || '';
-                const body = email.body || email.payload?.body?.data || '';
-                
-                return (
-                  <div
-                    key={email.id || email.threadId || email.messageId || index}
-                    className="p-4 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg shadow-sm hover:shadow-md transition-shadow"
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <div className="flex-1">
-                        <h4 className="font-semibold text-black dark:text-zinc-50 mb-1">
-                          {subject}
-                        </h4>
-                        <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
-                          <p>
-                            <strong>From:</strong> {from}
-                          </p>
-                          {to && (
-                            <p>
-                              <strong>To:</strong> {to}
-                            </p>
-                          )}
-                          {date && (
-                            <p>
-                              <strong>Date:</strong> {formatDate(date)}
-                            </p>
-                          )}
-                          {email.id && (
-                            <p className="text-xs text-gray-400">
-                              <strong>ID:</strong> {email.id}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    {snippet && (
-                      <div className="mt-3 pt-3 border-t border-gray-200 dark:border-zinc-700">
-                        <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-3">
-                          {snippet}
-                        </p>
-                      </div>
+                    {loading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Fetching emails...
+                      </>
+                    ) : (
+                      <>
+                        <MailOpen className="mr-2 h-4 w-4" />
+                        Fetch Emails
+                      </>
                     )}
-                    {body && (
-                      <details className="mt-3">
-                        <summary className="text-sm text-blue-600 dark:text-blue-400 cursor-pointer hover:underline">
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {message && (
+        <Alert>
+          <CheckCircle2 className="h-4 w-4" />
+          <AlertTitle>Success</AlertTitle>
+          <AlertDescription>{message}</AlertDescription>
+        </Alert>
+      )}
+
+      {error && (
+        <Alert variant="destructive">
+          <XCircle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {emails.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <MailOpen className="h-5 w-5" />
+              Your Emails ({emails.length})
+            </CardTitle>
+            <CardDescription>
+              Emails fetched from your Gmail account
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {emails.map((email, index) => {
+              console.log(`Email ${index}:`, email);
+              
+              const subject = getEmailField(email, 'subject') || email.subject || email.payload?.headers?.find((h: any) => h.name?.toLowerCase() === 'subject')?.value || 'No Subject';
+              const from = getEmailField(email, 'from') || email.from || email.payload?.headers?.find((h: any) => h.name?.toLowerCase() === 'from')?.value || 'Unknown sender';
+              const to = getEmailField(email, 'to') || email.to || email.payload?.headers?.find((h: any) => h.name?.toLowerCase() === 'to')?.value;
+              const date = getEmailField(email, 'date') || email.date || email.internalDate || email.payload?.headers?.find((h: any) => h.name?.toLowerCase() === 'date')?.value;
+              const snippet = email.snippet || '';
+              const body = email.body || email.payload?.body?.data || '';
+              
+              return (
+                <Card key={email.id || email.threadId || email.messageId || index} className="border">
+                  <CardHeader>
+                    <CardTitle className="text-lg">{subject}</CardTitle>
+                    <CardDescription className="space-y-1">
+                      <div><strong>From:</strong> {from}</div>
+                      {to && <div><strong>To:</strong> {to}</div>}
+                      {date && <div><strong>Date:</strong> {formatDate(date)}</div>}
+                      {email.id && (
+                        <div className="text-xs text-muted-foreground">
+                          <strong>ID:</strong> {email.id}
+                        </div>
+                      )}
+                    </CardDescription>
+                  </CardHeader>
+                  {snippet && (
+                    <CardContent>
+                      <p className="text-sm text-muted-foreground line-clamp-3">
+                        {snippet}
+                      </p>
+                    </CardContent>
+                  )}
+                  {body && (
+                    <CardContent>
+                      <details className="group">
+                        <summary className="cursor-pointer text-sm font-medium text-primary hover:underline">
                           View full email
                         </summary>
-                        <div className="mt-2 p-3 bg-gray-50 dark:bg-zinc-900 rounded text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap max-h-96 overflow-y-auto">
-                          {typeof body === 'string' ? body : JSON.stringify(body, null, 2)}
+                        <div className="mt-2 p-3 bg-muted rounded-md text-sm overflow-y-auto max-h-96">
+                          <pre className="whitespace-pre-wrap font-sans">
+                            {typeof body === 'string' ? body : JSON.stringify(body, null, 2)}
+                          </pre>
                         </div>
                       </details>
-                    )}
-                    {!snippet && !body && (
-                      <details className="mt-3">
-                        <summary className="text-sm text-gray-500 dark:text-gray-400 cursor-pointer hover:underline">
+                    </CardContent>
+                  )}
+                  {!snippet && !body && (
+                    <CardContent>
+                      <details className="group">
+                        <summary className="cursor-pointer text-sm text-muted-foreground hover:underline">
                           View raw email data (debug)
                         </summary>
-                        <div className="mt-2 p-3 bg-gray-50 dark:bg-zinc-900 rounded text-xs text-gray-600 dark:text-gray-400 overflow-x-auto">
+                        <div className="mt-2 p-3 bg-muted rounded-md text-xs overflow-x-auto">
                           <pre>{JSON.stringify(email, null, 2)}</pre>
                         </div>
                       </details>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
+                    </CardContent>
+                  )}
+                </Card>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
 
-      <div className="mt-6 p-4 bg-gray-50 dark:bg-zinc-800 rounded-lg">
-        <p className="text-xs text-gray-600 dark:text-gray-400">
-          <strong>Backend URL:</strong> {process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}
-        </p>
-        <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
-          Make sure the backend server is running on port 3001 and CORS is enabled.
-        </p>
-      </div>
+      <Card className="bg-muted/50">
+        <CardContent className="pt-6">
+          <div className="text-xs text-muted-foreground space-y-1">
+            <p><strong>Backend URL:</strong> {process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}</p>
+            <p>Make sure the backend server is running on port 3001 and CORS is enabled.</p>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
-
