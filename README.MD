@@ -2,6 +2,7 @@
 
 URSecretary is an AI Voice Assistant that can read and write emails, make phone calls, browse the web, and access your Google Account all to make your workflow that much simpler. It is able to track schedules, so like when a client is coming soon. It is also capable of summarizing and producing emails, all through voice command. If you are too busy to send a message or join a call queue, URSecretary is here to help and do all that for you.
 
+[![Watch the video](https://www.youtube.com/watch?v=xbAlIz7LeWs&t=5s/default.jpg)](https://www.youtube.com/watch?v=xbAlIz7LeWs&t=5s)
 ## Features
 
 - **Voice Assistant**: Powered by VAPI for natural voice interactions
