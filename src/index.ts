@@ -32,10 +32,6 @@ const CONFIG = {
 	VAPI_FROM_NUMBER_ID: process.env.VAPI_FROM_NUMBER_ID || process.env.SECOND_PHONE_NUMBER_ID, // Support both names
 	VAPI_FORCE_PHONE_PATCH: String(process.env.VAPI_FORCE_PHONE_PATCH || '').toLowerCase() === 'true',
 	
-	// VAPI - Personalization (uses VAPI_API_KEY or separate key)
-	VAPI_PRIVATE_API_KEY: process.env.VAPI_PRIVATE_API_KEY || process.env.VAPI_API_KEY,
-	PERSONALIZATION_ASSISTANT_ID: process.env.ASSISTANT_ID || process.env.VAPI_ASSISTANT_ID,
-	
 	// Supabase
 	SUPABASE_URL: process.env.SUPABASE_URL,
 	SUPABASE_KEY: process.env.SUPABASE_KEY,
@@ -2076,8 +2072,8 @@ let vapi: VapiClient | null = null;
 let supabase: any = null;
 
 // Initialize personalization clients if env vars are present
-if (CONFIG.VAPI_PRIVATE_API_KEY && CONFIG.PERSONALIZATION_ASSISTANT_ID && CONFIG.SUPABASE_URL && CONFIG.SUPABASE_KEY) {
-	vapi = new VapiClient({ token: CONFIG.VAPI_PRIVATE_API_KEY });
+if (CONFIG.VAPI_API_KEY && CONFIG.VAPI_ASSISTANT_ID && CONFIG.SUPABASE_URL && CONFIG.SUPABASE_KEY) {
+	vapi = new VapiClient({ token: CONFIG.VAPI_API_KEY });
 	supabase = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
 	console.log('✓ Personalization webhook enabled');
 } else {
@@ -2085,7 +2081,7 @@ if (CONFIG.VAPI_PRIVATE_API_KEY && CONFIG.PERSONALIZATION_ASSISTANT_ID && CONFIG
 }
 
 app.post('/personalization/webhook', async (req: Request, res: Response) => {
-	if (!vapi || !supabase || !CONFIG.PERSONALIZATION_ASSISTANT_ID) {
+	if (!vapi || !supabase || !CONFIG.VAPI_ASSISTANT_ID) {
 		return res.status(503).json({ 
 			error: 'Personalization webhook not configured',
 			details: 'Missing required environment variables: VAPI_PRIVATE_API_KEY, ASSISTANT_ID, SUPABASE_URL, SUPABASE_KEY'
@@ -2161,7 +2157,7 @@ app.post('/personalization/webhook', async (req: Request, res: Response) => {
 			+ 'Composio ID: ' + data!.composio_id;
 
 		// First, get the current assistant to preserve existing model configuration
-		const currentAssistant = await vapi.assistants.get(CONFIG.PERSONALIZATION_ASSISTANT_ID!);
+		const currentAssistant = await vapi.assistants.get(CONFIG.VAPI_ASSISTANT_ID!);
 		
 		if (!currentAssistant.model) {
 			console.error('[Personalization] Assistant does not have a model configuration');
@@ -2175,7 +2171,7 @@ app.post('/personalization/webhook', async (req: Request, res: Response) => {
 		console.log(`[Personalization] Using voice: ${voiceProvider} - ${voiceId}`);
 		
 		// Update the assistant with the custom prompt and voice
-		await vapi.assistants.update(CONFIG.PERSONALIZATION_ASSISTANT_ID!, {
+		await vapi.assistants.update(CONFIG.VAPI_ASSISTANT_ID!, {
 			model: {
 				...currentAssistant.model,
 				messages: [
@@ -2195,14 +2191,14 @@ app.post('/personalization/webhook', async (req: Request, res: Response) => {
 			backgroundSound: "off",
 		});
 
-		console.log(`[Personalization] Successfully updated assistant ${CONFIG.PERSONALIZATION_ASSISTANT_ID!} with custom prompt`);
+		console.log(`[Personalization] Successfully updated assistant ${CONFIG.VAPI_ASSISTANT_ID!} with custom prompt`);
 
 		// For silent transfer, respond to assistant-request with the assistant ID
 		res.status(200).json({
-			assistantId: CONFIG.PERSONALIZATION_ASSISTANT_ID!
+			assistantId: CONFIG.VAPI_ASSISTANT_ID!
 		});
 
-		console.log(`[Personalization] Silent transfer initiated - call ${call.id} will continue with assistant ${CONFIG.PERSONALIZATION_ASSISTANT_ID!}`);
+		console.log(`[Personalization] Silent transfer initiated - call ${call.id} will continue with assistant ${CONFIG.VAPI_ASSISTANT_ID!}`);
 
 	} catch (error: any) {
 		console.error('[Personalization] Error updating assistant:', error);

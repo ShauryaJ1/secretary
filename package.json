@@ -17,6 +17,7 @@
     "@composio/vercel": "^0.2.15",
     "@supabase/supabase-js": "^2.39.0",
     "@vapi-ai/server-sdk": "^0.10.2",
+    "composio": "^1.0.0",
     "cross-fetch": "^4.0.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
