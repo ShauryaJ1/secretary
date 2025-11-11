@@ -2407,6 +2407,162 @@ void (async () => {
 					required: ['callId']
 				},
 				serverUrl: `${publicBaseUrl.replace(/\/+$/, '')}/tools/call/messages/webhook`
+			},
+			{
+				name: 'gmail_fetch_emails',
+				description: 'Fetch emails from Gmail using Composio. Supports query filters, pagination, and various options.',
+				parameters: {
+					type: 'object',
+					properties: {
+						userId: { type: 'string', description: 'User ID for the Gmail account (default: "default")' },
+						query: { type: 'string', description: 'Gmail search query string (optional)' },
+						max_results: { type: 'number', description: 'Maximum number of results to return (optional)' },
+						verbose: { type: 'boolean', description: 'Whether to return verbose output (optional)' },
+						include_payload: { type: 'boolean', description: 'Whether to include full email payload (optional)' },
+						ids_only: { type: 'boolean', description: 'Whether to return only email IDs (optional)' },
+						include_spam_trash: { type: 'boolean', description: 'Whether to include spam and trash (optional)' },
+						label_ids: { type: 'array', items: { type: 'string' }, description: 'Array of label IDs to filter by (optional)' },
+						page_token: { type: 'string', description: 'Pagination token for next page (optional)' },
+						user_id: { type: 'string', description: 'Gmail user ID (optional)' }
+					},
+					required: []
+				},
+				serverUrl: `${publicBaseUrl.replace(/\/+$/, '')}/tools/gmail/fetch-emails/webhook`
+			},
+			{
+				name: 'gmail_list_threads',
+				description: 'List email threads from Gmail using Composio. Supports query filters and pagination.',
+				parameters: {
+					type: 'object',
+					properties: {
+						userId: { type: 'string', description: 'User ID for the Gmail account (default: "default")' },
+						query: { type: 'string', description: 'Gmail search query string (optional)' },
+						max_results: { type: 'number', description: 'Maximum number of results to return (optional)' },
+						verbose: { type: 'boolean', description: 'Whether to return verbose output (optional)' },
+						page_token: { type: 'string', description: 'Pagination token for next page (optional)' },
+						user_id: { type: 'string', description: 'Gmail user ID (optional)' }
+					},
+					required: []
+				},
+				serverUrl: `${publicBaseUrl.replace(/\/+$/, '')}/tools/gmail/list-threads/webhook`
+			},
+			{
+				name: 'gmail_fetch_message_by_id',
+				description: 'Fetch a specific email message by its message ID from Gmail using Composio.',
+				parameters: {
+					type: 'object',
+					properties: {
+						userId: { type: 'string', description: 'User ID for the Gmail account (default: "default")' },
+						message_id: { type: 'string', description: 'The Gmail message ID to fetch' },
+						format: { type: 'string', description: 'Message format (optional)' },
+						user_id: { type: 'string', description: 'Gmail user ID (optional)' }
+					},
+					required: ['message_id']
+				},
+				serverUrl: `${publicBaseUrl.replace(/\/+$/, '')}/tools/gmail/fetch-message-by-id/webhook`
+			},
+			{
+				name: 'gmail_fetch_message_by_thread',
+				description: 'Fetch all messages in a Gmail thread by thread ID using Composio.',
+				parameters: {
+					type: 'object',
+					properties: {
+						userId: { type: 'string', description: 'User ID for the Gmail account (default: "default")' },
+						thread_id: { type: 'string', description: 'The Gmail thread ID to fetch messages from' },
+						page_token: { type: 'string', description: 'Pagination token for next page (optional)' },
+						user_id: { type: 'string', description: 'Gmail user ID (optional)' }
+					},
+					required: ['thread_id']
+				},
+				serverUrl: `${publicBaseUrl.replace(/\/+$/, '')}/tools/gmail/fetch-message-by-thread/webhook`
+			},
+			{
+				name: 'gmail_send_email',
+				description: 'Send an email through Gmail using Composio. Supports HTML emails, CC, BCC, and more.',
+				parameters: {
+					type: 'object',
+					properties: {
+						userId: { type: 'string', description: 'User ID for the Gmail account (default: "default")' },
+						recipient_email: { type: 'string', description: 'Recipient email address (optional)' },
+						subject: { type: 'string', description: 'Email subject line (optional)' },
+						body: { type: 'string', description: 'Email body content (optional)' },
+						cc: { type: 'array', items: { type: 'string' }, description: 'CC recipients (optional)' },
+						bcc: { type: 'array', items: { type: 'string' }, description: 'BCC recipients (optional)' },
+						is_html: { type: 'boolean', description: 'Whether the body is HTML (optional)' },
+						user_id: { type: 'string', description: 'Gmail user ID (optional)' }
+					},
+					required: []
+				},
+				serverUrl: `${publicBaseUrl.replace(/\/+$/, '')}/tools/gmail/send-email/webhook`
+			},
+			{
+				name: 'gmail_reply_to_thread',
+				description: 'Reply to an existing Gmail thread using Composio. Maintains conversation context.',
+				parameters: {
+					type: 'object',
+					properties: {
+						userId: { type: 'string', description: 'User ID for the Gmail account (default: "default")' },
+						thread_id: { type: 'string', description: 'The Gmail thread ID to reply to' },
+						message_body: { type: 'string', description: 'Reply message body (optional)' },
+						recipient_email: { type: 'string', description: 'Recipient email address (optional)' },
+						cc: { type: 'array', items: { type: 'string' }, description: 'CC recipients (optional)' },
+						bcc: { type: 'array', items: { type: 'string' }, description: 'BCC recipients (optional)' },
+						is_html: { type: 'boolean', description: 'Whether the body is HTML (optional)' },
+						extra_recipients: { type: 'array', items: { type: 'string' }, description: 'Additional recipients (optional)' },
+						user_id: { type: 'string', description: 'Gmail user ID (optional)' }
+					},
+					required: ['thread_id']
+				},
+				serverUrl: `${publicBaseUrl.replace(/\/+$/, '')}/tools/gmail/reply-to-thread/webhook`
+			},
+			{
+				name: 'gmail_create_draft',
+				description: 'Create a draft email in Gmail using Composio. The draft can be sent later.',
+				parameters: {
+					type: 'object',
+					properties: {
+						userId: { type: 'string', description: 'User ID for the Gmail account (default: "default")' },
+						recipient_email: { type: 'string', description: 'Recipient email address (optional)' },
+						subject: { type: 'string', description: 'Email subject line (optional)' },
+						body: { type: 'string', description: 'Email body content (optional)' },
+						cc: { type: 'array', items: { type: 'string' }, description: 'CC recipients (optional)' },
+						bcc: { type: 'array', items: { type: 'string' }, description: 'BCC recipients (optional)' },
+						is_html: { type: 'boolean', description: 'Whether the body is HTML (optional)' },
+						user_id: { type: 'string', description: 'Gmail user ID (optional)' }
+					},
+					required: []
+				},
+				serverUrl: `${publicBaseUrl.replace(/\/+$/, '')}/tools/gmail/create-draft/webhook`
+			},
+			{
+				name: 'gmail_send_draft',
+				description: 'Send a previously created draft email in Gmail using Composio.',
+				parameters: {
+					type: 'object',
+					properties: {
+						userId: { type: 'string', description: 'User ID for the Gmail account (default: "default")' },
+						draft_id: { type: 'string', description: 'The Gmail draft ID to send' },
+						user_id: { type: 'string', description: 'Gmail user ID (optional)' }
+					},
+					required: ['draft_id']
+				},
+				serverUrl: `${publicBaseUrl.replace(/\/+$/, '')}/tools/gmail/send-draft/webhook`
+			},
+			{
+				name: 'gmail_list_drafts',
+				description: 'List all draft emails in Gmail using Composio. Supports pagination.',
+				parameters: {
+					type: 'object',
+					properties: {
+						userId: { type: 'string', description: 'User ID for the Gmail account (default: "default")' },
+						max_results: { type: 'number', description: 'Maximum number of results to return (optional)' },
+						verbose: { type: 'boolean', description: 'Whether to return verbose output (optional)' },
+						page_token: { type: 'string', description: 'Pagination token for next page (optional)' },
+						user_id: { type: 'string', description: 'Gmail user ID (optional)' }
+					},
+					required: []
+				},
+				serverUrl: `${publicBaseUrl.replace(/\/+$/, '')}/tools/gmail/list-drafts/webhook`
 			}
 		];
 
